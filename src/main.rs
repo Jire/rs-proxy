@@ -1,18 +1,17 @@
 use std::env;
 use std::net::SocketAddr;
-use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 use futures::FutureExt;
 use getopts::Options;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
-use tokio::sync::{broadcast, Notify};
+use tokio::sync::broadcast;
 use tokio::time::{self, Duration};
 
 type BoxedError = Box<dyn std::error::Error + Sync + Send + 'static>;
 
-static ACTIVE_CONNECTIONS: AtomicUsize = AtomicUsize::new(0);
+static ACTIVE_CONNECTIONS: AtomicU64 = AtomicU64::new(0);
 static DEBUG: AtomicBool = AtomicBool::new(false);
 const BUF_SIZE: usize = 1024;
 
@@ -85,10 +84,7 @@ async fn main() -> Result<(), BoxedError> {
     // let local_port: i32 = matches.opt_str("l").unwrap_or("0".to_string()).parse()?;
     let local_port: i32 = matches.opt_str("l").map(|s| s.parse()).unwrap_or(Ok(0))?;
 
-    let bind_addr = match matches.opt_str("b") {
-        Some(addr) => addr,
-        None => "127.0.0.1".to_owned(),
-    };
+    let bind_addr = matches.opt_str("b").unwrap_or_else(|| "127.0.0.1".to_owned());
 
     let timeout = match matches.opt_str("t") {
         Some(s) => s.parse::<u64>().unwrap_or_else(|_| 30),
@@ -115,9 +111,8 @@ async fn forward(
         .parse::<SocketAddr>()
         .expect("Failed to parse bind address");
 
-    let notify_no_connections = Arc::new(Notify::new());
-
     let listener = TcpListener::bind(&bind_sock).await?;
+
     println!("Listening on {}", listener.local_addr().unwrap());
 
     // `remote` should be either the host name or ip address, with the port appended.
@@ -128,62 +123,43 @@ async fn forward(
     // (This reduces MESI/MOESI cache traffic between CPU cores.)
     let remote: &str = Box::leak(remote.into_boxed_str());
 
-    let notify_clone = notify_no_connections.clone();
-    let listener_task = tokio::spawn(async move {
+    tokio::spawn(async move {
+        let mut interval = time::interval(Duration::from_secs(timeout));
         loop {
-            if let Ok((mut client, client_addr)) = listener.accept().await {
-                if let Err(e) = client.set_nodelay(true) {
-                    //eprintln!("Failed to set TCP_NODELAY: {}", e);
-                    drop(client);
-                    continue;
-                }
+            interval.tick().await;
 
-                let notify = notify_clone.clone();
+            let active_connections = ACTIVE_CONNECTIONS.load(Ordering::SeqCst);
+            if active_connections < 1 {
+                println!("No active connections for {} seconds, shutting down...", timeout);
 
-                // Increment active connection count
-                ACTIVE_CONNECTIONS.fetch_add(1, Ordering::SeqCst);
-
-                tokio::spawn(async move {
-                    //println!("New connection from {}", client_addr);
-
-                    match client.read_u8().await {
-                        Ok(14) => handle_rs2(remote, client, client_addr).await,
-                        Ok(15) => handle_js5(version, remote, client, client_addr).await,
-                        Ok(opcode) => {} //println!("Invalid opcode {} from {}", opcode, client_addr);
-                        Err(e) => {} //eprintln!("failed to read from socket; err = {:?}", e);
-                    }
-
-                    // Decrement active connection count
-                    if ACTIVE_CONNECTIONS.fetch_sub(1, Ordering::SeqCst) == 1 {
-                        // If this was the last connection, notify potential shutdown
-                        notify.notify_one();
-                    }
-                });
+                std::process::exit(0);
             } else {
-                break;
+                println!("{} active connections", active_connections)
             }
         }
     });
 
-    let shutdown_task = tokio::spawn(async move {
-        loop {
-            notify_no_connections.notified().await;
+    loop {
+        let (mut client, client_addr) = listener.accept().await?;
 
-            if ACTIVE_CONNECTIONS.load(Ordering::SeqCst) == 0 {
-                // Wait for 30 seconds of inactivity
-                time::sleep(Duration::from_secs(timeout)).await;
+        client.set_nodelay(true)?;
 
-                if ACTIVE_CONNECTIONS.load(Ordering::SeqCst) == 0 {
-                    println!("No active connections for {} seconds, shutting down.", timeout);
-                    std::process::exit(0);
-                }
+        ACTIVE_CONNECTIONS.fetch_add(1, Ordering::SeqCst);
+
+        tokio::spawn(async move {
+            //println!("New connection from {}", client_addr);
+
+            match client.read_u8().await {
+                Ok(14) => handle_rs2(remote, client, client_addr).await,
+                Ok(15) => handle_js5(version, remote, client, client_addr).await,
+                Ok(opcode) => {} //println!("Invalid opcode {} from {}", opcode, client_addr);
+                Err(e) => {} //eprintln!("failed to read from socket; err = {:?}", e);
             }
-        }
-    });
 
-    tokio::try_join!(listener_task, shutdown_task)?;
-
-    Ok(())
+            // Decrement active connection count
+            ACTIVE_CONNECTIONS.fetch_sub(1, Ordering::SeqCst);
+        });
+    }
 }
 
 async fn handle_rs2(
