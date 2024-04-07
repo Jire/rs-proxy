@@ -1,15 +1,18 @@
 use std::env;
 use std::net::{IpAddr, SocketAddr};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 use futures::FutureExt;
 use getopts::Options;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
-use tokio::sync::broadcast;
+use tokio::sync::{broadcast, Notify};
+use tokio::time::{self, Duration};
 
 type BoxedError = Box<dyn std::error::Error + Sync + Send + 'static>;
 
+static ACTIVE_CONNECTIONS: AtomicUsize = AtomicUsize::new(0);
 static DEBUG: AtomicBool = AtomicBool::new(false);
 const BUF_SIZE: usize = 1024;
 
@@ -47,6 +50,7 @@ async fn main() -> Result<(), BoxedError> {
         "The local port to which tcpproxy should bind to, randomly chosen otherwise",
         "LOCAL_PORT",
     );
+    opts.optflag("to", "timeout", "Sets the timeout in seconds to stop after no activity");
     opts.optflag("d", "debug", "Enable debug mode");
 
     let matches = match opts.parse(&args[2..]) {
@@ -81,14 +85,20 @@ async fn main() -> Result<(), BoxedError> {
         None => "127.0.0.1".to_owned(),
     };
 
-    forward(version, &bind_addr, local_port, remote).await
+    let timeout = match matches.opt_str("to") {
+        Some(s) => s.parse::<u64>().unwrap_or_else(|_| 30),
+        None => 30
+    };
+
+    forward(version, &bind_addr, local_port, remote, timeout).await
 }
 
 async fn forward(
     version: u32,
     bind_ip: &str,
     local_port: i32,
-    remote: String) -> Result<(), BoxedError> {
+    remote: String,
+    timeout: u64) -> Result<(), BoxedError> {
     // Listen on the specified IP and port
     let bind_addr = if !bind_ip.starts_with('[') && bind_ip.contains(':') {
         // Correctly format for IPv6 usage
@@ -99,6 +109,9 @@ async fn forward(
     let bind_sock = bind_addr
         .parse::<SocketAddr>()
         .expect("Failed to parse bind address");
+
+    let notify_no_connections = Arc::new(Notify::new());
+
     let listener = TcpListener::bind(&bind_sock).await?;
     println!("Listening on {}", listener.local_addr().unwrap());
 
@@ -110,37 +123,69 @@ async fn forward(
     // (This reduces MESI/MOESI cache traffic between CPU cores.)
     let remote: &str = Box::leak(remote.into_boxed_str());
 
-    loop {
-        let (mut client, client_addr) = listener.accept().await?;
-
-        client.set_nodelay(true)?;
-
-        tokio::spawn(async move {
-            //println!("New connection from {}", client_addr);
-
-            match client.read_u8().await {
-                Ok(14) => handle_rs2(remote, client, client_addr).await,
-                Ok(15) => handle_js5(version, remote, client, client_addr).await,
-                Ok(opcode) => {
-                    //println!("Invalid opcode {} from {}", opcode, client_addr);
+    let notify_clone = notify_no_connections.clone();
+    let listener_task = tokio::spawn(async move {
+        loop {
+            if let Ok((mut client, client_addr)) = listener.accept().await {
+                if let Err(e) = client.set_nodelay(true) {
+                    //eprintln!("Failed to set TCP_NODELAY: {}", e);
                     drop(client);
-                    return false;
+                    continue;
                 }
-                Err(e) => {
-                    //eprintln!("failed to read from socket; err = {:?}", e);
-                    drop(client);
-                    return false;
+
+                let notify = notify_clone.clone();
+
+                // Increment active connection count
+                ACTIVE_CONNECTIONS.fetch_add(1, Ordering::SeqCst);
+
+                tokio::spawn(async move {
+                    //println!("New connection from {}", client_addr);
+
+                    match client.read_u8().await {
+                        Ok(14) => handle_rs2(remote, client, client_addr).await,
+                        Ok(15) => handle_js5(version, remote, client, client_addr).await,
+                        Ok(opcode) => {} //println!("Invalid opcode {} from {}", opcode, client_addr);
+                        Err(e) => {} //eprintln!("failed to read from socket; err = {:?}", e);
+                    }
+
+                    // Decrement active connection count
+                    if ACTIVE_CONNECTIONS.fetch_sub(1, Ordering::SeqCst) == 1 {
+                        // If this was the last connection, notify potential shutdown
+                        notify.notify_one();
+                    }
+                });
+            } else {
+                break;
+            }
+        }
+    });
+
+    let shutdown_task = tokio::spawn(async move {
+        loop {
+            notify_no_connections.notified().await;
+
+            if ACTIVE_CONNECTIONS.load(Ordering::SeqCst) == 0 {
+                // Wait for 30 seconds of inactivity
+                time::sleep(Duration::from_secs(timeout)).await;
+
+                if ACTIVE_CONNECTIONS.load(Ordering::SeqCst) == 0 {
+                    println!("No active connections for {} seconds, shutting down.", timeout);
+                    std::process::exit(0);
                 }
             }
-        });
-    }
+        }
+    });
+
+    tokio::try_join!(listener_task, shutdown_task)?;
+
+    Ok(())
 }
 
 async fn handle_rs2(
     remote: &str,
     mut client: TcpStream,
     client_addr: SocketAddr,
-) -> bool {
+) {
     match client.write_u8(0).await {
         Ok(_) => {
             println!("Connecting RS2 {}", client_addr);
@@ -148,7 +193,6 @@ async fn handle_rs2(
         }
         Err(e) => {}//eprintln!("failed to write RS2 response to socket; err = {:?}", e)
     }
-    return false;
 }
 
 async fn handle_js5(
@@ -156,7 +200,7 @@ async fn handle_js5(
     remote: &str,
     mut client: TcpStream,
     client_addr: SocketAddr,
-) -> bool {
+) {
     match client.read_u32().await {
         Ok(version) => if expected_version == version {
             match client.write_u8(0).await {
@@ -169,7 +213,6 @@ async fn handle_js5(
         },
         Err(e) => {}//eprintln!("failed to read from JS5 socket; err = {:?}", e)
     };
-    return false;
 }
 
 async fn start_proxying(
@@ -177,13 +220,13 @@ async fn start_proxying(
     mut client: TcpStream,
     client_addr: SocketAddr,
     opcode: u8,
-) -> bool {
+) {
     // Establish connection to upstream for each incoming client connection
     let mut remote = match TcpStream::connect(remote).await {
         Ok(result) => result,
         Err(e) => {
             //eprintln!("Error establishing upstream connection: {e}");
-            return false;
+            return;
         }
     };
 
@@ -210,7 +253,7 @@ async fn start_proxying(
         Ok(_) => println!("Connected {} with opcode {}", client_addr, opcode),
         Err(e) => {
             //eprintln!("Failed to write opcode {} response to {}; err = {:?}", opcode, client_addr, e);
-            return false;
+            return;
         }
     }
 
@@ -260,8 +303,6 @@ async fn start_proxying(
             eprintln!("{}", err);
         }
     };
-
-    return true;
 }
 
 // Two instances of this function are spawned for each half of the connection: client-to-server,

@@ -1,6 +1,6 @@
 [package]
 name = "tcpproxy-rs"
-version = "0.6.0"
+version = "0.7.0"
 authors = ["Mahmoud Al-Qudsi <mqudsi@neosmart.net>", "Jire"]
 description = "Cross-platform asynchronous multi-client TCP proxy; great tokio demo."
 homepage = "https://github.com/neosmart/tcpproxy"
@@ -14,4 +14,4 @@ edition = "2018"
 [dependencies]
 futures = "0.3.30"
 getopts = "0.2.21"
-tokio = { version = "1.37.0", features = ["io-util", "net", "rt-multi-thread", "macros", "sync"] }
+tokio = { version = "1.37.0", features = ["io-util", "net", "rt-multi-thread", "macros", "sync", "time"] }
