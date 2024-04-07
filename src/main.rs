@@ -114,17 +114,19 @@ async fn forward(
         let (mut client, client_addr) = listener.accept().await?;
 
         tokio::spawn(async move {
-            println!("New connection from {}", client_addr);
+            //println!("New connection from {}", client_addr);
 
             match client.read_u8().await {
                 Ok(14) => handle_rs2(remote, client, client_addr).await,
                 Ok(15) => handle_js5(version, remote, client, client_addr).await,
                 Ok(opcode) => {
-                    println!("Invalid opcode {} from {}", opcode, client_addr);
+                    //println!("Invalid opcode {} from {}", opcode, client_addr);
+                    drop(client);
                     return false;
                 }
                 Err(e) => {
-                    eprintln!("failed to read from socket; err = {:?}", e);
+                    //eprintln!("failed to read from socket; err = {:?}", e);
+                    drop(client);
                     return false;
                 }
             }
@@ -142,8 +144,7 @@ async fn handle_rs2(
             println!("Connecting RS2 {}", client_addr);
             return start_proxying(remote, client, client_addr, 14).await;
         }
-        Err(e) =>
-            eprintln!("failed to write RS2 response to socket; err = {:?}", e)
+        Err(e) => {}//eprintln!("failed to write RS2 response to socket; err = {:?}", e)
     }
     return false;
 }
@@ -161,11 +162,10 @@ async fn handle_js5(
                     println!("Connecting JS5 {}", client_addr);
                     return start_proxying(remote, client, client_addr, 15).await;
                 }
-                Err(e) =>
-                    eprintln!("failed to write JS5 response to socket; err = {:?}", e)
+                Err(e) => {}//eprintln!("failed to write JS5 response to socket; err = {:?}", e)
             }
         },
-        Err(e) => eprintln!("failed to read from JS5 socket; err = {:?}", e)
+        Err(e) => {}//eprintln!("failed to read from JS5 socket; err = {:?}", e)
     };
     return false;
 }
@@ -180,7 +180,7 @@ async fn start_proxying(
     let mut remote = match TcpStream::connect(remote).await {
         Ok(result) => result,
         Err(e) => {
-            eprintln!("Error establishing upstream connection: {e}");
+            //eprintln!("Error establishing upstream connection: {e}");
             return false;
         }
     };
@@ -189,7 +189,7 @@ async fn start_proxying(
     match remote.write_u8(opcode).await {
         Ok(_) => println!("Connected {} with opcode {}", client_addr, opcode),
         Err(e) => {
-            eprintln!("Failed to write opcode {} response to {}; err = {:?}", opcode, client_addr, e);
+            //eprintln!("Failed to write opcode {} response to {}; err = {:?}", opcode, client_addr, e);
             return false;
         }
     }
@@ -225,12 +225,12 @@ async fn start_proxying(
 
     match remote_copied {
         Ok(count) => {
-            if DEBUG.load(Ordering::Relaxed) {
+            /*if DEBUG.load(Ordering::Relaxed) {
                 eprintln!(
                     "Transferred {} bytes from upstream server to proxy client {}",
                     count, client_addr
                 );
-            }
+            }*/
         }
         Err(err) => {
             eprintln!(
