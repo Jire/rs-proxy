@@ -50,7 +50,7 @@ async fn main() -> Result<(), BoxedError> {
         "The local port to which tcpproxy should bind to, randomly chosen otherwise",
         "LOCAL_PORT",
     );
-    opts.optflag("to", "timeout", "Sets the timeout in seconds to stop after no activity");
+    opts.optflag("t", "timeout", "Sets the timeout in seconds to stop after no activity");
     opts.optflag("d", "debug", "Enable debug mode");
 
     let matches = match opts.parse(&args[2..]) {
