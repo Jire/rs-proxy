@@ -35,12 +35,6 @@ async fn main() -> Result<(), BoxedError> {
     println!("Version: {}", version);
 
     let mut opts = Options::new();
-    opts.reqopt(
-        "v",
-        "version",
-        "The RuneScape client version.",
-        "VERSION",
-    );
     opts.optopt(
         "b",
         "bind",
