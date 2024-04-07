@@ -85,7 +85,7 @@ async fn main() -> Result<(), BoxedError> {
         None => "127.0.0.1".to_owned(),
     };
 
-    let timeout = match matches.opt_str("to") {
+    let timeout = match matches.opt_str("t") {
         Some(s) => s.parse::<u64>().unwrap_or_else(|_| 30),
         None => 30
     };
