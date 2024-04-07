@@ -20,7 +20,7 @@ fn print_usage(program: &str, opts: Options) {
     let program_path = std::path::PathBuf::from(program);
     let program_name = program_path.file_stem().unwrap().to_string_lossy();
     let brief = format!(
-        "Usage: {} VERSION REMOTE_HOST:PORT [-b BIND_ADDR] [-l LOCAL_PORT]",
+        "Usage: {} VERSION REMOTE_HOST:PORT [-b BIND_ADDR] [-l LOCAL_PORT] [-t TIMEOUT]",
         program_name
     );
     print!("{}", opts.usage(&brief));
@@ -50,7 +50,12 @@ async fn main() -> Result<(), BoxedError> {
         "The local port to which tcpproxy should bind to, randomly chosen otherwise",
         "LOCAL_PORT",
     );
-    opts.optflag("t", "timeout", "Sets the timeout in seconds to stop after no activity");
+    opts.optopt(
+        "t",
+        "timeout",
+        "Sets the timeout in seconds to stop after no activity",
+        "TIMEOUT",
+    );
     opts.optflag("d", "debug", "Enable debug mode");
 
     let matches = match opts.parse(&args[2..]) {
