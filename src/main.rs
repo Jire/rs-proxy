@@ -125,6 +125,8 @@ async fn forward(
 
     tokio::spawn(async move {
         let mut interval = time::interval(Duration::from_secs(timeout));
+        interval.tick().await; // first tick completes immediately, so we need to skip
+
         loop {
             interval.tick().await;
 
