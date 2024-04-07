@@ -1,5 +1,5 @@
 use std::env;
-use std::net::SocketAddr;
+use std::net::{IpAddr, SocketAddr};
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use futures::FutureExt;
@@ -113,6 +113,8 @@ async fn forward(
     loop {
         let (mut client, client_addr) = listener.accept().await?;
 
+        client.set_nodelay(true)?;
+
         tokio::spawn(async move {
             //println!("New connection from {}", client_addr);
 
@@ -185,8 +187,26 @@ async fn start_proxying(
         }
     };
 
-    // Write the opcode to the server
-    match remote.write_u8(opcode).await {
+    let _ = remote.set_nodelay(true);
+
+    let mut vec: Vec<u8> = Vec::new();
+
+    /* Write the real client IP address */
+    match client_addr.ip() {
+        IpAddr::V4(ipv4) => {
+            vec.push(0);
+            vec.extend_from_slice(&ipv4.octets())
+        }
+        IpAddr::V6(ipv6) => {
+            vec.push(1);
+            vec.extend_from_slice(&ipv6.octets())
+        }
+    }
+
+    /* Write the opcode */
+    vec.push(opcode);
+
+    match remote.write_all(&vec).await {
         Ok(_) => println!("Connected {} with opcode {}", client_addr, opcode),
         Err(e) => {
             //eprintln!("Failed to write opcode {} response to {}; err = {:?}", opcode, client_addr, e);
