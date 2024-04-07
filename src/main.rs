@@ -1,5 +1,5 @@
 use std::env;
-use std::net::{IpAddr, SocketAddr};
+use std::net::SocketAddr;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
@@ -232,24 +232,7 @@ async fn start_proxying(
 
     let _ = remote.set_nodelay(true);
 
-    let mut vec: Vec<u8> = Vec::new();
-
-    /* Write the real client IP address */
-    match client_addr.ip() {
-        IpAddr::V4(ipv4) => {
-            vec.push(0);
-            vec.extend_from_slice(&ipv4.octets())
-        }
-        IpAddr::V6(ipv6) => {
-            vec.push(1);
-            vec.extend_from_slice(&ipv6.octets())
-        }
-    }
-
-    /* Write the opcode */
-    vec.push(opcode);
-
-    match remote.write_all(&vec).await {
+    match remote.write_u8(opcode).await {
         Ok(_) => println!("Connected {} with opcode {}", client_addr, opcode),
         Err(e) => {
             //eprintln!("Failed to write opcode {} response to {}; err = {:?}", opcode, client_addr, e);
