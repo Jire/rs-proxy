@@ -248,6 +248,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "rs-proxy"
+version = "0.7.6"
+dependencies = [
+ "futures",
+ "getopts",
+ "tokio",
+]
+
+[[package]]
 name = "rustc-demangle"
 version = "0.1.23"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -281,15 +290,6 @@ dependencies = [
  "proc-macro2",
  "quote",
  "unicode-ident",
-]
-
-[[package]]
-name = "tcpproxy-rs"
-version = "0.7.6"
-dependencies = [
- "futures",
- "getopts",
- "tokio",
 ]
 
 [[package]]

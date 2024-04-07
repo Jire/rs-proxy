@@ -1,5 +1,5 @@
 [package]
-name = "tcpproxy-rs"
+name = "rs-proxy"
 version = "0.7.6"
 authors = ["Mahmoud Al-Qudsi <mqudsi@neosmart.net>", "Jire"]
 description = "Cross-platform asynchronous multi-client TCP proxy; great tokio demo."
