@@ -249,7 +249,7 @@ dependencies = [
 
 [[package]]
 name = "rs-proxy"
-version = "0.7.6"
+version = "0.1.0"
 dependencies = [
  "futures",
  "getopts",

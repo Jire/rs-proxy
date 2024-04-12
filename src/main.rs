@@ -46,7 +46,7 @@ async fn main() -> Result<(), BoxedError> {
     opts.optopt(
         "l",
         "local-port",
-        "The local port to which tcpproxy should bind to, randomly chosen otherwise",
+        "The local port to which rs-proxy should bind to, randomly chosen otherwise",
         "LOCAL_PORT",
     );
     opts.optopt(
