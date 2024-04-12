@@ -151,8 +151,8 @@ async fn forward(
             match client.read_u8().await {
                 Ok(14) => handle_rs2(remote, client, client_addr).await,
                 Ok(15) => handle_js5(version, remote, client, client_addr).await,
-                Ok(opcode) => {} //println!("Invalid opcode {} from {}", opcode, client_addr);
-                Err(e) => {} //eprintln!("failed to read from socket; err = {:?}", e);
+                Ok(_opcode) => {} //println!("Invalid opcode {} from {}", _opcode, client_addr);
+                Err(_e) => {} //eprintln!("failed to read from socket; err = {:?}", _e);
             }
 
             // Decrement active connection count
@@ -171,7 +171,7 @@ async fn handle_rs2(
             println!("Connecting RS2 {}", client_addr);
             return start_proxying(remote, client, client_addr, 14).await;
         }
-        Err(e) => {}//eprintln!("failed to write RS2 response to socket; err = {:?}", e)
+        Err(_e) => {}//eprintln!("failed to write RS2 response to socket; err = {:?}", _e)
     }
 }
 
@@ -188,10 +188,10 @@ async fn handle_js5(
                     println!("Connecting JS5 {}", client_addr);
                     return start_proxying(remote, client, client_addr, 15).await;
                 }
-                Err(e) => {}//eprintln!("failed to write JS5 response to socket; err = {:?}", e)
+                Err(_e) => {}//eprintln!("failed to write JS5 response to socket; err = {:?}", _e)
             }
         },
-        Err(e) => {}//eprintln!("failed to read from JS5 socket; err = {:?}", e)
+        Err(_e) => {}//eprintln!("failed to read from JS5 socket; err = {:?}", _e)
     };
 }
 
@@ -204,8 +204,8 @@ async fn start_proxying(
     // Establish connection to upstream for each incoming client connection
     let mut remote = match TcpStream::connect(remote).await {
         Ok(result) => result,
-        Err(e) => {
-            //eprintln!("Error establishing upstream connection: {e}");
+        Err(_e) => {
+            //eprintln!("Error establishing upstream connection: {_e}");
             return;
         }
     };
@@ -214,8 +214,8 @@ async fn start_proxying(
 
     match remote.write_u8(opcode).await {
         Ok(_) => println!("Connected {} with opcode {}", client_addr, opcode),
-        Err(e) => {
-            //eprintln!("Failed to write opcode {} response to {}; err = {:?}", opcode, client_addr, e);
+        Err(_e) => {
+            //eprintln!("Failed to write opcode {} response to {}; err = {:?}", opcode, client_addr, _e);
             return;
         }
     }
