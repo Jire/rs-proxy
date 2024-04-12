@@ -1,6 +1,6 @@
 use std::env;
 use std::net::SocketAddr;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use futures::FutureExt;
 use getopts::Options;
@@ -11,9 +11,9 @@ use tokio::time::{self, Duration};
 
 type BoxedError = Box<dyn std::error::Error + Sync + Send + 'static>;
 
+const BUF_SIZE: usize = 65536;
+
 static ACTIVE_CONNECTIONS: AtomicU64 = AtomicU64::new(0);
-static DEBUG: AtomicBool = AtomicBool::new(false);
-const BUF_SIZE: usize = 1024;
 
 fn print_usage(program: &str, opts: Options) {
     let program_path = std::path::PathBuf::from(program);
@@ -55,7 +55,6 @@ async fn main() -> Result<(), BoxedError> {
         "Sets the timeout in seconds to stop after no activity",
         "TIMEOUT",
     );
-    opts.optflag("d", "debug", "Enable debug mode");
 
     let matches = match opts.parse(&args[2..]) {
         Ok(opts) => opts,
@@ -78,8 +77,6 @@ async fn main() -> Result<(), BoxedError> {
         eprintln!("A remote port is required (REMOTE_ADDR:PORT)");
         std::process::exit(-1);
     }
-
-    DEBUG.store(matches.opt_present("d"), Ordering::Relaxed);
 
     // let local_port: i32 = matches.opt_str("l").unwrap_or("0".to_string()).parse()?;
     let local_port: i32 = matches.opt_str("l").map(|s| s.parse()).unwrap_or(Ok(0))?;
@@ -235,14 +232,7 @@ async fn start_proxying(
             };
 
     match client_copied {
-        Ok(count) => {
-            if DEBUG.load(Ordering::Relaxed) {
-                eprintln!(
-                    "Transferred {} bytes from proxy client {} to upstream server",
-                    count, client_addr
-                );
-            }
-        }
+        Ok(_) => {}
         Err(err) => {
             eprintln!(
                 "Error writing bytes from proxy client {} to upstream server",
@@ -253,14 +243,7 @@ async fn start_proxying(
     };
 
     match remote_copied {
-        Ok(count) => {
-            /*if DEBUG.load(Ordering::Relaxed) {
-                eprintln!(
-                    "Transferred {} bytes from upstream server to proxy client {}",
-                    count, client_addr
-                );
-            }*/
-        }
+        Ok(_) => {}
         Err(err) => {
             eprintln!(
                 "Error writing from upstream server to proxy client {}!",
