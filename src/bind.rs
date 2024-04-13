@@ -10,6 +10,7 @@ use js5::handle_js5;
 use rs2::handle_rs2;
 
 use crate::{js5, rs2};
+use crate::timeout_io::TimeoutTcpStream;
 
 pub(crate) async fn bind(
     version: u32,
@@ -43,17 +44,13 @@ pub(crate) async fn bind(
         tokio_uring::spawn(async move {
             num_cons.fetch_add(1, Ordering::SeqCst);
 
-            let (result, buf) = ingress.read(vec![0u8]).await;
-            match result {
-                Ok(size) => {
-                    if size > 0 {
-                        let opcode = buf[0];
-                        match opcode {
-                            14 => handle_rs2(egress_addr, ingress, ingress_addr).await,
-                            15 => handle_js5(version, egress_addr, ingress, ingress_addr).await,
-                            _ => {
-                                //println!("Invalid opcode {} from {}", _opcode, client_addr);
-                            }
+            match ingress.read_u8(30).await {
+                Ok(opcode) => {
+                    match opcode {
+                        14 => handle_rs2(egress_addr, ingress, ingress_addr).await,
+                        15 => handle_js5(version, egress_addr, ingress, ingress_addr).await,
+                        _ => {
+                            //println!("Invalid opcode {} from {}", _opcode, client_addr);
                         }
                     }
                 }
@@ -72,9 +69,9 @@ async fn check_activity(
     // We can still spawn stuff, but with tokio_uring's `spawn`. The future
     // we send doesn't have to be `Send`, since it's all single-threaded.
     tokio_uring::spawn({
-        let mut last_activity = Instant::now();
-
         async move {
+            let mut last_activity = Instant::now();
+
             loop {
                 sleep(Duration::from_secs(timeout / 6)).await;
 

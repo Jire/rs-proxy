@@ -6,6 +6,8 @@ use tokio::{io, time};
 use tokio_uring::buf::IoBuf;
 use tokio_uring::net::TcpStream;
 
+use crate::timeout_io::TimeoutTcpStream;
+
 const BUFFER_SIZE: usize = 1024;
 
 pub(crate) async fn start_proxying(
@@ -22,12 +24,8 @@ pub(crate) async fn start_proxying(
         }
     };
 
-    let (result, _) = egress.write(vec![opcode]).await;
-    match result {
-        Ok(size) => {
-            if size < 1 {
-                return;
-            }
+    match egress.write_u8(opcode, 30).await {
+        Ok(_) => {
             println!("Connected {} with opcode {}", ingress_addr, opcode)
         }
         Err(_) => {
