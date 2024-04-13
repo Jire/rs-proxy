@@ -59,11 +59,9 @@ pub(crate) async fn listen(
     while let Ok((ingress, ingress_addr)) = listener.accept().await {
         let num_conns = num_conns.clone();
 
-        let connections = num_conns.load(Ordering::SeqCst);
-        println!("Accepted connection {} ({} total)", ingress_addr, connections);
-
         tokio_uring::spawn(async move {
-            num_conns.fetch_add(1, Ordering::SeqCst);
+            let connections = num_conns.fetch_add(1, Ordering::SeqCst);
+            println!("Accepted connection {} ({} total)", ingress_addr, connections);
 
             let (result, buf) = ingress.read(vec![0u8]).await;
             match result {
