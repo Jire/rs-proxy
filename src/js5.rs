@@ -2,6 +2,8 @@ use std::net::SocketAddr;
 
 use tokio_uring::net::TcpStream;
 
+use proxying::start_proxying;
+
 use crate::proxying;
 
 pub(crate) async fn handle_js5(
@@ -26,7 +28,7 @@ pub(crate) async fn handle_js5(
             match result {
                 Ok(_) => {
                     println!("Connecting JS5 {}", ingress_addr);
-                    return proxying::start_proxying(egress_addr, ingress, ingress_addr, 15).await;
+                    return start_proxying(egress_addr, ingress, ingress_addr, 15).await;
                 }
                 Err(_e) => {
                     return;

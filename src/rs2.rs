@@ -2,6 +2,8 @@ use std::net::SocketAddr;
 
 use tokio_uring::net::TcpStream;
 
+use proxying::start_proxying;
+
 use crate::proxying;
 
 pub(crate) async fn handle_rs2(
@@ -13,7 +15,7 @@ pub(crate) async fn handle_rs2(
     match result {
         Ok(_) => {
             println!("Connecting RS2 {}", ingress_addr);
-            return proxying::start_proxying(egress_addr, ingress, ingress_addr, 14).await;
+            return start_proxying(egress_addr, ingress, ingress_addr, 14).await;
         }
         Err(_e) => {
             //eprintln!("failed to write RS2 response to socket; err = {:?}", _e)

@@ -10,6 +10,8 @@ mod proxying;
 
 type BoxedError = Box<dyn Error + Sync + Send + 'static>;
 
+const DEFAULT_TIMEOUT: u64 = 30;
+
 fn main() -> Result<(), BoxedError> {
     let args: Vec<String> = env::args().collect();
 
@@ -66,12 +68,12 @@ fn main() -> Result<(), BoxedError> {
     let bind_addr = matches.opt_str("b").unwrap_or_else(|| "127.0.0.1".to_owned());
 
     let timeout = match matches.opt_str("t") {
-        Some(s) => s.parse::<u64>().unwrap_or_else(|_| 30),
-        None => 30
+        Some(s) => s.parse::<u64>().unwrap_or_else(|_| DEFAULT_TIMEOUT),
+        None => DEFAULT_TIMEOUT
     };
 
     tokio_uring::start(async move {
-        bind::listen(version, &bind_addr, local_port, remote, timeout).await;
+        bind::bind(version, &bind_addr, local_port, remote, timeout).await;
     });
 
     Ok(())
