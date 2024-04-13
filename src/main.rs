@@ -267,7 +267,7 @@ async fn start_proxying(
     // `TcpStream::connect` wants.
     let egress = connect_with_timeout(egress_addr, 30).await.unwrap();
 
-    let (result, _) = egress.write_all(vec![0u8]).await;
+    let (result, _) = egress.write_all(vec![opcode]).await;
     match result {
         Ok(_) => {
             println!("Connected {} with opcode {}", ingress_addr, opcode)
