@@ -9,7 +9,7 @@ pub(crate) async fn handle_rs2(
     ingress: TcpStream,
     ingress_addr: SocketAddr,
 ) {
-    let (result, _) = ingress.write_all(vec![0u8]).await;
+    let (result, _) = ingress.write(vec![0u8]).await;
     match result {
         Ok(_) => {
             println!("Connecting RS2 {}", ingress_addr);

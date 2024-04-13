@@ -26,7 +26,7 @@ pub(crate) async fn listen(
 
         async move {
             loop {
-                sleep(Duration::from_secs(5)).await;
+                sleep(Duration::from_secs(timeout / 6)).await;
 
                 let connections = num_cons.load(Ordering::SeqCst);
                 if connections > 0 {
@@ -56,7 +56,7 @@ pub(crate) async fn listen(
         .expect("Failed to parse bind address");
 
     let listener = TcpListener::bind(bind_sock).unwrap();
-    println!("Listening on {}", listener.local_addr().unwrap());
+    println!("Listening on {} for RS version {}", listener.local_addr().unwrap(), version);
 
     while let Ok((ingress, ingress_addr)) = listener.accept().await {
         let num_cons = Arc::clone(&num_cons);

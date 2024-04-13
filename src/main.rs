@@ -18,8 +18,6 @@ fn main() -> Result<(), BoxedError> {
     let version_str = &args[1]; // Get the first user-supplied argument
     let version: u32 = version_str.parse().map_err(|e| format!("Failed to parse version as u32: {}", e))?;
 
-    println!("Version: {}", version);
-
     let mut opts = Options::new();
     opts.optopt(
         "b",

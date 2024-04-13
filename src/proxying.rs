@@ -14,20 +14,20 @@ pub(crate) async fn start_proxying(
     ingress_addr: SocketAddr,
     opcode: u8,
 ) {
-    // same deal, we need to parse first. if you're puzzled why there's
-    // no mention of `SocketAddr` anywhere, it's inferred from what
-    // `TcpStream::connect` wants.
     let egress = match connect_with_timeout(egress_addr, 30).await {
         Ok(stream) => stream,
         Err(_e) => {
-            //eprintln!("Failed to connect to {}; err = {:?}", client_addr, _e);
+            eprintln!("Failed to connect to {}; err = {:?}", egress_addr, _e);
             return;
         }
     };
 
-    let (result, _) = egress.write_all(vec![opcode]).await;
+    let (result, _) = egress.write(vec![opcode]).await;
     match result {
-        Ok(_) => {
+        Ok(size) => {
+            if size < 1 {
+                return;
+            }
             println!("Connected {} with opcode {}", ingress_addr, opcode)
         }
         Err(_) => {
@@ -59,6 +59,7 @@ pub(crate) async fn start_proxying(
     if let Err(e) = res {
         println!("Connection error: {}", e);
     }
+
     // Make sure the reference count drops to zero and the socket is
     // freed by aborting both tasks (which both hold a `Rc<TcpStream>`
     // for each direction)
