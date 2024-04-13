@@ -11,7 +11,7 @@ use tokio::time::{self, Duration};
 
 type BoxedError = Box<dyn std::error::Error + Sync + Send + 'static>;
 
-const BUF_SIZE: usize = 65536;
+const BUF_SIZE: usize = 1024;
 
 static ACTIVE_CONNECTIONS: AtomicU64 = AtomicU64::new(0);
 
