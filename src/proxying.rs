@@ -17,7 +17,13 @@ pub(crate) async fn start_proxying(
     // same deal, we need to parse first. if you're puzzled why there's
     // no mention of `SocketAddr` anywhere, it's inferred from what
     // `TcpStream::connect` wants.
-    let egress = connect_with_timeout(egress_addr, 30).await.unwrap();
+    let egress = match connect_with_timeout(egress_addr, 30).await {
+        Ok(stream) => stream,
+        Err(_e) => {
+            //eprintln!("Failed to connect to {}; err = {:?}", client_addr, _e);
+            return;
+        }
+    };
 
     let (result, _) = egress.write_all(vec![opcode]).await;
     match result {
