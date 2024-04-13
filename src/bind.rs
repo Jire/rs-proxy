@@ -1,5 +1,4 @@
 use std::net::SocketAddr;
-use std::rc::Rc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
@@ -16,19 +15,19 @@ pub(crate) async fn listen(
     timeout: u64) {
     let egress_addr: SocketAddr = remote.parse().unwrap();
 
-    let num_conns: Rc<AtomicU64> = Default::default();
+    let num_cons = AtomicU64::new(0);
 
     // We can still spawn stuff, but with tokio_uring's `spawn`. The future
     // we send doesn't have to be `Send`, since it's all single-threaded.
     tokio_uring::spawn({
-        let num_conns = num_conns.clone();
         let mut last_activity = Instant::now();
 
         async move {
             loop {
-                let connections = num_conns.load(Ordering::SeqCst);
+                let connections = num_cons.load(Ordering::SeqCst);
                 if connections > 0 {
                     last_activity = Instant::now();
+                    println!("{} active connections", connections);
                 } else {
                     let idle_time = last_activity.elapsed();
                     println!("Idle for {idle_time:?}");
@@ -56,12 +55,9 @@ pub(crate) async fn listen(
     let listener = TcpListener::bind(bind_sock).unwrap();
     println!("Listening on {}", listener.local_addr().unwrap());
 
-    while let Ok((ingress, ingress_addr)) = listener.accept().await {
-        let num_conns = num_conns.clone();
-
+    while let Ok((mut ingress, ingress_addr)) = listener.accept().await {
         tokio_uring::spawn(async move {
-            let connections = num_conns.fetch_add(1, Ordering::SeqCst);
-            println!("Accepted connection {} ({} total)", ingress_addr, connections);
+            num_cons.fetch_add(1, Ordering::SeqCst);
 
             let (result, buf) = ingress.read(vec![0u8]).await;
             match result {
@@ -80,7 +76,7 @@ pub(crate) async fn listen(
                 Err(_e) => {} //eprintln!("failed to read from socket; err = {:?}", _e);*/
             }
 
-            num_conns.fetch_sub(1, Ordering::SeqCst);
+            num_cons.fetch_sub(1, Ordering::SeqCst);
         });
     }
 }
