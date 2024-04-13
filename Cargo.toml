@@ -1,6 +1,6 @@
 [package]
 name = "rs-proxy"
-version = "0.2.3"
+version = "0.2.4"
 authors = ["Jire"]
 description = "a simple, cross-platform, multi-client TCP proxy for Old-school RS2/JS5"
 homepage = "https://github.com/Jire/rs-proxy"
