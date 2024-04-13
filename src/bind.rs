@@ -1,4 +1,5 @@
 use std::net::SocketAddr;
+use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
@@ -15,12 +16,12 @@ pub(crate) async fn listen(
     timeout: u64) {
     let egress_addr: SocketAddr = remote.parse().unwrap();
 
-    let num_cons = AtomicU64::new(0);
+    let num_cons = Arc::new(AtomicU64::new(0));
 
     // We can still spawn stuff, but with tokio_uring's `spawn`. The future
     // we send doesn't have to be `Send`, since it's all single-threaded.
     tokio_uring::spawn({
-        let num_cons = num_cons.clone();
+        let num_cons = Arc::clone(&num_cons);
         let mut last_activity = Instant::now();
 
         async move {
@@ -57,7 +58,7 @@ pub(crate) async fn listen(
     println!("Listening on {}", listener.local_addr().unwrap());
 
     while let Ok((ingress, ingress_addr)) = listener.accept().await {
-        let num_cons = num_cons.clone();
+        let num_cons = Arc::clone(&num_cons);
 
         tokio_uring::spawn(async move {
             num_cons.fetch_add(1, Ordering::SeqCst);
