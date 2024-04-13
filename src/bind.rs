@@ -20,6 +20,7 @@ pub(crate) async fn listen(
     // We can still spawn stuff, but with tokio_uring's `spawn`. The future
     // we send doesn't have to be `Send`, since it's all single-threaded.
     tokio_uring::spawn({
+        let num_cons = num_cons.clone();
         let mut last_activity = Instant::now();
 
         async move {
@@ -55,7 +56,9 @@ pub(crate) async fn listen(
     let listener = TcpListener::bind(bind_sock).unwrap();
     println!("Listening on {}", listener.local_addr().unwrap());
 
-    while let Ok((mut ingress, ingress_addr)) = listener.accept().await {
+    while let Ok((ingress, ingress_addr)) = listener.accept().await {
+        let num_cons = num_cons.clone();
+
         tokio_uring::spawn(async move {
             num_cons.fetch_add(1, Ordering::SeqCst);
 
