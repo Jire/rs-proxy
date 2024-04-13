@@ -4,6 +4,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use futures::FutureExt;
 use getopts::Options;
+use tokio::io;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::broadcast;
@@ -148,7 +149,7 @@ async fn forward(
         tokio::spawn(async move {
             //println!("New connection from {}", client_addr);
 
-            match client.read_u8().await {
+            match read_with_timeout(&mut client, 10).await {
                 Ok(14) => handle_rs2(remote, client, client_addr).await,
                 Ok(15) => handle_js5(version, remote, client, client_addr).await,
                 Ok(_opcode) => {} //println!("Invalid opcode {} from {}", _opcode, client_addr);
@@ -161,17 +162,61 @@ async fn forward(
     }
 }
 
+async fn read_with_timeout(
+    client: &mut TcpStream,
+    secs: u64) -> io::Result<u8> {
+    match time::timeout(Duration::from_secs(secs), client.read_u8()).await {
+        Ok(Ok(u8)) => Ok(u8),
+        Ok(Err(e)) => Err(e),
+        Err(_) => Err(io::Error::new(io::ErrorKind::TimedOut, "Read timed out"))
+    }
+}
+
+async fn write_with_timeout(
+    client: &mut TcpStream,
+    n: u8,
+    secs: u64) -> io::Result<()> {
+    match time::timeout(Duration::from_secs(secs), client.write_u8(n)).await {
+        Ok(Ok(())) => Ok(()),
+        Ok(Err(e)) => Err(e),
+        Err(_) => Err(io::Error::new(io::ErrorKind::TimedOut, "Write timed out"))
+    }
+}
+
+async fn read_u32_with_timeout(
+    client: &mut TcpStream,
+    secs: u64) -> io::Result<u32> {
+    match time::timeout(Duration::from_secs(secs), client.read_u32()).await {
+        Ok(Ok(u32)) => Ok(u32),
+        Ok(Err(e)) => Err(e),
+        Err(_) => Err(io::Error::new(io::ErrorKind::TimedOut, "Read u32 timed out"))
+    }
+}
+
+async fn connect_with_timeout(
+    remote: &str,
+    secs: u64) -> io::Result<TcpStream> {
+    match time::timeout(Duration::from_secs(secs), TcpStream::connect(remote)).await {
+        Ok(Ok(stream)) => Ok(stream),
+        Ok(Err(e)) => Err(e),  // Error from TcpStream::connect
+        Err(_) => Err(io::Error::new(io::ErrorKind::TimedOut, "Connection timed out")),
+    }
+}
+
 async fn handle_rs2(
     remote: &str,
     mut client: TcpStream,
     client_addr: SocketAddr,
 ) {
-    match client.write_u8(0).await {
+    match write_with_timeout(&mut client, 0, 10).await {
         Ok(_) => {
             println!("Connecting RS2 {}", client_addr);
             return start_proxying(remote, client, client_addr, 14).await;
         }
-        Err(_e) => {}//eprintln!("failed to write RS2 response to socket; err = {:?}", _e)
+        Err(_e) => {
+            //eprintln!("failed to write RS2 response to socket; err = {:?}", _e)
+            return;
+        }
     }
 }
 
@@ -181,18 +226,24 @@ async fn handle_js5(
     mut client: TcpStream,
     client_addr: SocketAddr,
 ) {
-    match client.read_u32().await {
+    match read_u32_with_timeout(&mut client, 10).await {
         Ok(version) => if expected_version == version {
-            match client.write_u8(0).await {
+            match write_with_timeout(&mut client, 0, 10).await {
                 Ok(_) => {
                     println!("Connecting JS5 {}", client_addr);
                     return start_proxying(remote, client, client_addr, 15).await;
                 }
-                Err(_e) => {}//eprintln!("failed to write JS5 response to socket; err = {:?}", _e)
+                Err(_e) => {
+                    //eprintln!("failed to write JS5 response to socket; err = {:?}", _e)
+                    return;
+                }
             }
         },
-        Err(_e) => {}//eprintln!("failed to read from JS5 socket; err = {:?}", _e)
-    };
+        Err(_e) => {
+            //eprintln!("failed to read from JS5 socket; err = {:?}", _e)
+            return;
+        }
+    }
 }
 
 async fn start_proxying(
@@ -202,7 +253,7 @@ async fn start_proxying(
     opcode: u8,
 ) {
     // Establish connection to upstream for each incoming client connection
-    let mut remote = match TcpStream::connect(remote).await {
+    let mut remote = match connect_with_timeout(remote, 30).await {
         Ok(result) => result,
         Err(_e) => {
             //eprintln!("Error establishing upstream connection: {_e}");
@@ -212,8 +263,10 @@ async fn start_proxying(
 
     let _ = remote.set_nodelay(true);
 
-    match remote.write_u8(opcode).await {
-        Ok(_) => println!("Connected {} with opcode {}", client_addr, opcode),
+    match write_with_timeout(&mut remote, opcode, 10).await {
+        Ok(_) => {
+            println!("Connected {} with opcode {}", client_addr, opcode)
+        }
         Err(_e) => {
             //eprintln!("Failed to write opcode {} response to {}; err = {:?}", opcode, client_addr, _e);
             return;
@@ -238,7 +291,7 @@ async fn start_proxying(
                 "Error writing bytes from proxy client {} to upstream server",
                 client_addr
             );
-            eprintln!("{}", err);
+            eprintln!("Client copy error: {}", err);
         }
     };
 
@@ -249,7 +302,7 @@ async fn start_proxying(
                 "Error writing from upstream server to proxy client {}!",
                 client_addr
             );
-            eprintln!("{}", err);
+            eprintln!("Remote copy error: {}", err);
         }
     };
 }
@@ -263,10 +316,10 @@ async fn copy_with_abort<R, W>(
     read: &mut R,
     write: &mut W,
     mut abort: broadcast::Receiver<()>,
-) -> tokio::io::Result<usize>
+) -> io::Result<usize>
     where
-        R: tokio::io::AsyncRead + Unpin,
-        W: tokio::io::AsyncWrite + Unpin,
+        R: io::AsyncRead + Unpin,
+        W: io::AsyncWrite + Unpin,
 {
     let mut copied = 0;
     let mut buf = [0u8; BUF_SIZE];
