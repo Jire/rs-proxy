@@ -26,6 +26,8 @@ pub(crate) async fn listen(
 
         async move {
             loop {
+                sleep(Duration::from_secs(5)).await;
+
                 let connections = num_cons.load(Ordering::SeqCst);
                 if connections > 0 {
                     last_activity = Instant::now();
@@ -38,7 +40,6 @@ pub(crate) async fn listen(
                         std::process::exit(0)
                     }
                 }
-                sleep(Duration::from_secs(5)).await;
             }
         }
     });
