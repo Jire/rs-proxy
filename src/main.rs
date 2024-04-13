@@ -1,20 +1,10 @@
-use std::env;
+use std::{env, rc::Rc, sync::atomic::{AtomicU64, Ordering}, time::{Duration, Instant}};
 use std::net::SocketAddr;
-use std::sync::atomic::{AtomicU64, Ordering};
 
-use futures::FutureExt;
 use getopts::Options;
-use tokio::io;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::net::{TcpListener, TcpStream};
-use tokio::sync::broadcast;
-use tokio::time::{self, Duration};
-
-type BoxedError = Box<dyn std::error::Error + Sync + Send + 'static>;
-
-const BUF_SIZE: usize = 1024;
-
-static ACTIVE_CONNECTIONS: AtomicU64 = AtomicU64::new(0);
+use tokio::{io, time};
+use tokio::time::sleep;
+use tokio_uring::{buf::IoBuf, net::{TcpListener, TcpStream}};
 
 fn print_usage(program: &str, opts: Options) {
     let program_path = std::path::PathBuf::from(program);
@@ -26,8 +16,7 @@ fn print_usage(program: &str, opts: Options) {
     print!("{}", opts.usage(&brief));
 }
 
-#[tokio::main]
-async fn main() -> Result<(), BoxedError> {
+fn main() {
     let args: Vec<String> = env::args().collect();
 
     let program = args[0].clone();
@@ -89,7 +78,9 @@ async fn main() -> Result<(), BoxedError> {
         None => 30
     };
 
-    forward(version, &bind_addr, local_port, remote, timeout).await
+    tokio_uring::start(async move {
+        forward(version, &bind_addr, local_port, remote, timeout).await?;
+    })?;
 }
 
 async fn forward(
@@ -97,7 +88,34 @@ async fn forward(
     bind_ip: &str,
     local_port: i32,
     remote: String,
-    timeout: u64) -> Result<(), BoxedError> {
+    timeout: u64) {
+    let remote: &str = Box::leak(remote.into_boxed_str());
+
+    let num_conns: Rc<AtomicU64> = Default::default();
+
+    // We can still spawn stuff, but with tokio_uring's `spawn`. The future
+    // we send doesn't have to be `Send`, since it's all single-threaded.
+    tokio_uring::spawn({
+        let num_conns = num_conns.clone();
+        let mut last_activity = Instant::now();
+
+        async move {
+            loop {
+                if num_conns.load(Ordering::SeqCst) > 0 {
+                    last_activity = Instant::now();
+                } else {
+                    let idle_time = last_activity.elapsed();
+                    println!("Idle for {idle_time:?}");
+                    if idle_time > Duration::from_secs(timeout) {
+                        println!("Stopping machine. Goodbye!");
+                        std::process::exit(0)
+                    }
+                }
+                sleep(Duration::from_secs(5)).await;
+            }
+        }
+    });
+
     // Listen on the specified IP and port
     let bind_addr = if !bind_ip.starts_with('[') && bind_ip.contains(':') {
         // Correctly format for IPv6 usage
@@ -109,94 +127,71 @@ async fn forward(
         .parse::<SocketAddr>()
         .expect("Failed to parse bind address");
 
-    let listener = TcpListener::bind(&bind_sock).await?;
-
+    let listener = TcpListener::bind(bind_sock).unwrap();
     println!("Listening on {}", listener.local_addr().unwrap());
 
-    // `remote` should be either the host name or ip address, with the port appended.
-    // It doesn't get tested/validated until we get our first connection, though!
+    while let Ok((mut client, client_addr)) = listener.accept().await {
+        println!("Accepted connection");
 
-    // We leak `remote` instead of wrapping it in an Arc to share it with future tasks since
-    // `remote` is going to live for the lifetime of the server in all cases.
-    // (This reduces MESI/MOESI cache traffic between CPU cores.)
-    let remote: &str = Box::leak(remote.into_boxed_str());
+        let num_conns = num_conns.clone();
 
-    tokio::spawn(async move {
-        let mut interval = time::interval(Duration::from_secs(timeout));
-        interval.tick().await; // first tick completes immediately, so we need to skip
+        tokio_uring::spawn(async move {
+            num_conns.fetch_add(1, Ordering::SeqCst);
 
-        loop {
-            interval.tick().await;
-
-            let active_connections = ACTIVE_CONNECTIONS.load(Ordering::SeqCst);
-            if active_connections < 1 {
-                println!("No active connections for {} seconds, shutting down...", timeout);
-
-                std::process::exit(0);
-            } else {
-                println!("{} active connections", active_connections)
-            }
-        }
-    });
-
-    loop {
-        let (mut client, client_addr) = listener.accept().await?;
-
-        client.set_nodelay(true)?;
-
-        ACTIVE_CONNECTIONS.fetch_add(1, Ordering::SeqCst);
-
-        tokio::spawn(async move {
-            //println!("New connection from {}", client_addr);
-
-            match read_with_timeout(&mut client, 10).await {
-                Ok(14) => handle_rs2(remote, client, client_addr).await,
-                Ok(15) => handle_js5(version, remote, client, client_addr).await,
-                Ok(_opcode) => {} //println!("Invalid opcode {} from {}", _opcode, client_addr);
-                Err(_e) => {} //eprintln!("failed to read from socket; err = {:?}", _e);
+            let (result, buf) = client.read(&[0u8]).await;
+            match result {
+                Ok(size) => {
+                    if (size > 0) {
+                        let opcode = buf[0];
+                        match opcode {
+                            14 => handle_rs2(remote, client, client_addr).await,
+                            15 => handle_js5(version, remote, client, client_addr).await,
+                            _ => {
+                                //println!("Invalid opcode {} from {}", _opcode, client_addr);
+                            }
+                        }
+                    }
+                }
+                Err(_e) => {} //eprintln!("failed to read from socket; err = {:?}", _e);*/
             }
 
-            // Decrement active connection count
-            ACTIVE_CONNECTIONS.fetch_sub(1, Ordering::SeqCst);
+            num_conns.fetch_sub(1, Ordering::SeqCst);
         });
     }
 }
 
-async fn read_with_timeout(
-    client: &mut TcpStream,
-    secs: u64) -> io::Result<u8> {
-    match time::timeout(Duration::from_secs(secs), client.read_u8()).await {
-        Ok(Ok(u8)) => Ok(u8),
-        Ok(Err(e)) => Err(e),
-        Err(_) => Err(io::Error::new(io::ErrorKind::TimedOut, "Read timed out"))
-    }
-}
+async fn copy(from: Rc<TcpStream>, to: Rc<TcpStream>) -> Result<(), std::io::Error> {
+    let mut buf = vec![0u8; 1024];
+    loop {
+        // things look weird: we pass ownership of the buffer to `read`, and we get
+        // it back, _even if there was an error_. There's a whole trait for that,
+        // which `Vec<u8>` implements!
+        let (res, buf_read) = from.read(buf).await;
+        // Propagate errors, see how many bytes we read
+        let n = res?;
+        if n == 0 {
+            // A read of size zero signals EOF (end of file), finish gracefully
+            return Ok(());
+        }
 
-async fn write_with_timeout(
-    client: &mut TcpStream,
-    n: u8,
-    secs: u64) -> io::Result<()> {
-    match time::timeout(Duration::from_secs(secs), client.write_u8(n)).await {
-        Ok(Ok(())) => Ok(()),
-        Ok(Err(e)) => Err(e),
-        Err(_) => Err(io::Error::new(io::ErrorKind::TimedOut, "Write timed out"))
-    }
-}
+        // The `slice` method here is implemented in an extension trait: it
+        // returns an owned slice of our `Vec<u8>`, which we later turn back
+        // into the full `Vec<u8>`
+        let (res, buf_write) = to.write(buf_read.slice(..n)).await;
+        res?;
 
-async fn read_u32_with_timeout(
-    client: &mut TcpStream,
-    secs: u64) -> io::Result<u32> {
-    match time::timeout(Duration::from_secs(secs), client.read_u32()).await {
-        Ok(Ok(u32)) => Ok(u32),
-        Ok(Err(e)) => Err(e),
-        Err(_) => Err(io::Error::new(io::ErrorKind::TimedOut, "Read u32 timed out"))
+        // Later is now, we want our full buffer back.
+        // That's why we declared our binding `mut` way back at the start of `copy`,
+        // even though we moved it into the very first `TcpStream::read` call.
+        buf = buf_write.into_inner();
     }
 }
 
 async fn connect_with_timeout(
     remote: &str,
     secs: u64) -> io::Result<TcpStream> {
-    match time::timeout(Duration::from_secs(secs), TcpStream::connect(remote)).await {
+    let egress_addr = remote.parse().unwrap();
+    match time::timeout(Duration::from_secs(secs), TcpStream::connect(egress_addr)).await {
         Ok(Ok(stream)) => Ok(stream),
         Ok(Err(e)) => Err(e),  // Error from TcpStream::connect
         Err(_) => Err(io::Error::new(io::ErrorKind::TimedOut, "Connection timed out")),
@@ -208,7 +203,8 @@ async fn handle_rs2(
     mut client: TcpStream,
     client_addr: SocketAddr,
 ) {
-    match write_with_timeout(&mut client, 0, 10).await {
+    let (result, buf) = client.write_all(&[0u8]).await;
+    match result {
         Ok(_) => {
             println!("Connecting RS2 {}", client_addr);
             return start_proxying(remote, client, client_addr, 14).await;
@@ -226,19 +222,29 @@ async fn handle_js5(
     mut client: TcpStream,
     client_addr: SocketAddr,
 ) {
-    match read_u32_with_timeout(&mut client, 10).await {
-        Ok(version) => if expected_version == version {
-            match write_with_timeout(&mut client, 0, 10).await {
+    let (result, buf) = client.read(&[0u32]).await;
+    match result {
+        Ok(size) => {
+            if (size <= 0) {
+                return;
+            }
+
+            let version = buf[0];
+            if expected_version != version {
+                return;
+            }
+
+            let (result, buf) = client.write_all(&[0u8]).await;
+            match result {
                 Ok(_) => {
                     println!("Connecting JS5 {}", client_addr);
                     return start_proxying(remote, client, client_addr, 15).await;
                 }
                 Err(_e) => {
-                    //eprintln!("failed to write JS5 response to socket; err = {:?}", _e)
                     return;
                 }
             }
-        },
+        }
         Err(_e) => {
             //eprintln!("failed to read from JS5 socket; err = {:?}", _e)
             return;
@@ -248,108 +254,52 @@ async fn handle_js5(
 
 async fn start_proxying(
     remote: &str,
-    mut client: TcpStream,
+    client: TcpStream,
     client_addr: SocketAddr,
     opcode: u8,
 ) {
-    // Establish connection to upstream for each incoming client connection
-    let mut remote = match connect_with_timeout(remote, 30).await {
-        Ok(result) => result,
-        Err(_e) => {
-            //eprintln!("Error establishing upstream connection: {_e}");
-            return;
-        }
-    };
+    // same deal, we need to parse first. if you're puzzled why there's
+    // no mention of `SocketAddr` anywhere, it's inferred from what
+    // `TcpStream::connect` wants.
+    let mut remote = connect_with_timeout(remote, 30).await.unwrap();
 
-    let _ = remote.set_nodelay(true);
-
-    match write_with_timeout(&mut remote, opcode, 10).await {
+    let (result, buf) = remote.write_all(&[0u8]).await;
+    match result {
         Ok(_) => {
             println!("Connected {} with opcode {}", client_addr, opcode)
         }
-        Err(_e) => {
+        Err(_) => {
             //eprintln!("Failed to write opcode {} response to {}; err = {:?}", opcode, client_addr, _e);
             return;
         }
     }
 
-    let (mut client_read, mut client_write) = client.split();
-    let (mut remote_read, mut remote_write) = remote.split();
+    // `read` and `write` take owned buffers (more on that later), and
+    // there's no "per-socket" buffer, so they actually take `&self`.
+    // which means we don't need to split them into a read half and a
+    // write half like we'd normally do with "regular tokio". Instead,
+    // we can send a reference-counted version of it. also, since a
+    // tokio-uring runtime is single-threaded, we can use `Rc` instead of
+    // `Arc`.
+    let egress = Rc::new(remote);
+    let ingress = Rc::new(client);
 
-    let (cancel, _) = broadcast::channel::<()>(1);
-    let (remote_copied, client_copied) = tokio::join! {
-                copy_with_abort(&mut remote_read, &mut client_write, cancel.subscribe())
-                    .then(|r| { let _ = cancel.send(()); async { r } }),
-                copy_with_abort(&mut client_read, &mut remote_write, cancel.subscribe())
-                    .then(|r| { let _ = cancel.send(()); async { r } }),
-            };
+    // We need to copy in both directions...
+    let mut from_ingress = tokio_uring::spawn(
+        copy(ingress.clone(), egress.clone())
+    );
+    let mut from_egress = tokio_uring::spawn(
+        copy(egress.clone(), ingress.clone())
+    );
 
-    match client_copied {
-        Ok(_) => {}
-        Err(err) => {
-            eprintln!(
-                "Error writing bytes from proxy client {} to upstream server",
-                client_addr
-            );
-            eprintln!("Client copy error: {}", err);
-        }
-    };
-
-    match remote_copied {
-        Ok(_) => {}
-        Err(err) => {
-            eprintln!(
-                "Error writing from upstream server to proxy client {}!",
-                client_addr
-            );
-            eprintln!("Remote copy error: {}", err);
-        }
-    };
-}
-
-// Two instances of this function are spawned for each half of the connection: client-to-server,
-// server-to-client. We can't use tokio::io::copy() instead (no matter how convenient it might
-// be) because it doesn't give us a way to correlate the lifetimes of the two tcp read/write
-// loops: even after the client disconnects, tokio would keep the upstream connection to the
-// server alive until the connection's max client idle timeout is reached.
-async fn copy_with_abort<R, W>(
-    read: &mut R,
-    write: &mut W,
-    mut abort: broadcast::Receiver<()>,
-) -> io::Result<usize>
-    where
-        R: io::AsyncRead + Unpin,
-        W: io::AsyncWrite + Unpin,
-{
-    let mut copied = 0;
-    let mut buf = [0u8; BUF_SIZE];
-    loop {
-        let bytes_read;
-        tokio::select! {
-                biased;
-
-                result = read.read(&mut buf) => {
-                    use std::io::ErrorKind::{ConnectionReset, ConnectionAborted};
-                    bytes_read = result.or_else(|e| match e.kind() {
-                        // Consider these to be part of the proxy life, not errors
-                        ConnectionReset | ConnectionAborted => Ok(0),
-                        _ => Err(e)
-                    })?;
-                },
-                _ = abort.recv() => {
-                    break;
-                }
-            }
-
-        if bytes_read == 0 {
-            break;
-        }
-
-        // While we ignore some read errors above, any error writing data we've already read to
-        // the other side is always treated as exceptional.
-        write.write_all(&buf[0..bytes_read]).await?;
-        copied += bytes_read;
+    // Stop as soon as one of them errors
+    let res = tokio::try_join!(&mut from_ingress, &mut from_egress);
+    if let Err(e) = res {
+        println!("Connection error: {}", e);
     }
-
-    Ok(copied)
+    // Make sure the reference count drops to zero and the socket is
+    // freed by aborting both tasks (which both hold a `Rc<TcpStream>`
+    // for each direction)
+    from_ingress.abort();
+    from_egress.abort();
 }
