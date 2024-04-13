@@ -1,10 +1,13 @@
 use std::{env, rc::Rc, sync::atomic::{AtomicU64, Ordering}, time::{Duration, Instant}};
+use std::error::Error;
 use std::net::SocketAddr;
 
 use getopts::Options;
 use tokio::{io, time};
 use tokio::time::sleep;
 use tokio_uring::{buf::IoBuf, net::{TcpListener, TcpStream}};
+
+type BoxedError = Box<dyn Error + Sync + Send + 'static>;
 
 fn print_usage(program: &str, opts: Options) {
     let program_path = std::path::PathBuf::from(program);
@@ -16,7 +19,7 @@ fn print_usage(program: &str, opts: Options) {
     print!("{}", opts.usage(&brief));
 }
 
-fn main() {
+fn main() -> Result<(), BoxedError> {
     let args: Vec<String> = env::args().collect();
 
     let program = args[0].clone();
@@ -79,8 +82,10 @@ fn main() {
     };
 
     tokio_uring::start(async move {
-        forward(version, &bind_addr, local_port, remote, timeout).await?;
-    })?;
+        forward(version, &bind_addr, local_port, remote, timeout).await;
+    });
+
+    Ok(())
 }
 
 async fn forward(
@@ -130,7 +135,7 @@ async fn forward(
     let listener = TcpListener::bind(bind_sock).unwrap();
     println!("Listening on {}", listener.local_addr().unwrap());
 
-    while let Ok((mut client, client_addr)) = listener.accept().await {
+    while let Ok((client, client_addr)) = listener.accept().await {
         println!("Accepted connection");
 
         let num_conns = num_conns.clone();
@@ -138,10 +143,10 @@ async fn forward(
         tokio_uring::spawn(async move {
             num_conns.fetch_add(1, Ordering::SeqCst);
 
-            let (result, buf) = client.read(&[0u8]).await;
+            let (result, buf) = client.read(vec![0u8]).await;
             match result {
                 Ok(size) => {
-                    if (size > 0) {
+                    if size > 0 {
                         let opcode = buf[0];
                         match opcode {
                             14 => handle_rs2(remote, client, client_addr).await,
@@ -200,10 +205,10 @@ async fn connect_with_timeout(
 
 async fn handle_rs2(
     remote: &str,
-    mut client: TcpStream,
+    client: TcpStream,
     client_addr: SocketAddr,
 ) {
-    let (result, buf) = client.write_all(&[0u8]).await;
+    let (result, _) = client.write_all(vec![0u8]).await;
     match result {
         Ok(_) => {
             println!("Connecting RS2 {}", client_addr);
@@ -219,22 +224,22 @@ async fn handle_rs2(
 async fn handle_js5(
     expected_version: u32,
     remote: &str,
-    mut client: TcpStream,
+    client: TcpStream,
     client_addr: SocketAddr,
 ) {
-    let (result, buf) = client.read(&[0u32]).await;
+    let (result, buf) = client.read(vec![0u8; 4]).await;
     match result {
         Ok(size) => {
-            if (size <= 0) {
+            if size <= 0 {
                 return;
             }
 
-            let version = buf[0];
+            let version = u32::from_be_bytes([buf[0], buf[1], buf[2], buf[3]]);
             if expected_version != version {
                 return;
             }
 
-            let (result, buf) = client.write_all(&[0u8]).await;
+            let (result, _) = client.write_all(vec![0u8]).await;
             match result {
                 Ok(_) => {
                     println!("Connecting JS5 {}", client_addr);
@@ -261,9 +266,9 @@ async fn start_proxying(
     // same deal, we need to parse first. if you're puzzled why there's
     // no mention of `SocketAddr` anywhere, it's inferred from what
     // `TcpStream::connect` wants.
-    let mut remote = connect_with_timeout(remote, 30).await.unwrap();
+    let remote = connect_with_timeout(remote, 30).await.unwrap();
 
-    let (result, buf) = remote.write_all(&[0u8]).await;
+    let (result, _) = remote.write_all(vec![0u8]).await;
     match result {
         Ok(_) => {
             println!("Connected {} with opcode {}", client_addr, opcode)
