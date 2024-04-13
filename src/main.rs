@@ -94,7 +94,7 @@ async fn forward(
     local_port: i32,
     remote: String,
     timeout: u64) {
-    let remote: &str = Box::leak(remote.into_boxed_str());
+    let egress_addr: SocketAddr = remote.parse().unwrap();
 
     let num_conns: Rc<AtomicU64> = Default::default();
 
@@ -135,7 +135,7 @@ async fn forward(
     let listener = TcpListener::bind(bind_sock).unwrap();
     println!("Listening on {}", listener.local_addr().unwrap());
 
-    while let Ok((client, client_addr)) = listener.accept().await {
+    while let Ok((ingress, ingress_addr)) = listener.accept().await {
         println!("Accepted connection");
 
         let num_conns = num_conns.clone();
@@ -143,14 +143,14 @@ async fn forward(
         tokio_uring::spawn(async move {
             num_conns.fetch_add(1, Ordering::SeqCst);
 
-            let (result, buf) = client.read(vec![0u8]).await;
+            let (result, buf) = ingress.read(vec![0u8]).await;
             match result {
                 Ok(size) => {
                     if size > 0 {
                         let opcode = buf[0];
                         match opcode {
-                            14 => handle_rs2(remote, client, client_addr).await,
-                            15 => handle_js5(version, remote, client, client_addr).await,
+                            14 => handle_rs2(egress_addr, ingress, ingress_addr).await,
+                            15 => handle_js5(version, egress_addr, ingress, ingress_addr).await,
                             _ => {
                                 //println!("Invalid opcode {} from {}", _opcode, client_addr);
                             }
@@ -165,7 +165,7 @@ async fn forward(
     }
 }
 
-async fn copy(from: Rc<TcpStream>, to: Rc<TcpStream>) -> Result<(), std::io::Error> {
+async fn copy(from: Rc<TcpStream>, to: Rc<TcpStream>) -> Result<(), io::Error> {
     let mut buf = vec![0u8; 1024];
     loop {
         // things look weird: we pass ownership of the buffer to `read`, and we get
@@ -193,26 +193,25 @@ async fn copy(from: Rc<TcpStream>, to: Rc<TcpStream>) -> Result<(), std::io::Err
 }
 
 async fn connect_with_timeout(
-    remote: &str,
+    egress_addr: SocketAddr,
     secs: u64) -> io::Result<TcpStream> {
-    let egress_addr = remote.parse().unwrap();
     match time::timeout(Duration::from_secs(secs), TcpStream::connect(egress_addr)).await {
-        Ok(Ok(stream)) => Ok(stream),
+        Ok(Ok(egress)) => Ok(egress),
         Ok(Err(e)) => Err(e),  // Error from TcpStream::connect
         Err(_) => Err(io::Error::new(io::ErrorKind::TimedOut, "Connection timed out")),
     }
 }
 
 async fn handle_rs2(
-    remote: &str,
-    client: TcpStream,
-    client_addr: SocketAddr,
+    egress_addr: SocketAddr,
+    ingress: TcpStream,
+    ingress_addr: SocketAddr,
 ) {
-    let (result, _) = client.write_all(vec![0u8]).await;
+    let (result, _) = ingress.write_all(vec![0u8]).await;
     match result {
         Ok(_) => {
-            println!("Connecting RS2 {}", client_addr);
-            return start_proxying(remote, client, client_addr, 14).await;
+            println!("Connecting RS2 {}", ingress_addr);
+            return start_proxying(egress_addr, ingress, ingress_addr, 14).await;
         }
         Err(_e) => {
             //eprintln!("failed to write RS2 response to socket; err = {:?}", _e)
@@ -223,11 +222,11 @@ async fn handle_rs2(
 
 async fn handle_js5(
     expected_version: u32,
-    remote: &str,
-    client: TcpStream,
-    client_addr: SocketAddr,
+    egress_addr: SocketAddr,
+    ingress: TcpStream,
+    ingress_addr: SocketAddr,
 ) {
-    let (result, buf) = client.read(vec![0u8; 4]).await;
+    let (result, buf) = ingress.read(vec![0u8; 4]).await;
     match result {
         Ok(size) => {
             if size <= 0 {
@@ -239,11 +238,11 @@ async fn handle_js5(
                 return;
             }
 
-            let (result, _) = client.write_all(vec![0u8]).await;
+            let (result, _) = ingress.write_all(vec![0u8]).await;
             match result {
                 Ok(_) => {
-                    println!("Connecting JS5 {}", client_addr);
-                    return start_proxying(remote, client, client_addr, 15).await;
+                    println!("Connecting JS5 {}", ingress_addr);
+                    return start_proxying(egress_addr, ingress, ingress_addr, 15).await;
                 }
                 Err(_e) => {
                     return;
@@ -258,20 +257,20 @@ async fn handle_js5(
 }
 
 async fn start_proxying(
-    remote: &str,
-    client: TcpStream,
-    client_addr: SocketAddr,
+    egress_addr: SocketAddr,
+    ingress: TcpStream,
+    ingress_addr: SocketAddr,
     opcode: u8,
 ) {
     // same deal, we need to parse first. if you're puzzled why there's
     // no mention of `SocketAddr` anywhere, it's inferred from what
     // `TcpStream::connect` wants.
-    let remote = connect_with_timeout(remote, 30).await.unwrap();
+    let egress = connect_with_timeout(egress_addr, 30).await.unwrap();
 
-    let (result, _) = remote.write_all(vec![0u8]).await;
+    let (result, _) = egress.write_all(vec![0u8]).await;
     match result {
         Ok(_) => {
-            println!("Connected {} with opcode {}", client_addr, opcode)
+            println!("Connected {} with opcode {}", ingress_addr, opcode)
         }
         Err(_) => {
             //eprintln!("Failed to write opcode {} response to {}; err = {:?}", opcode, client_addr, _e);
@@ -286,8 +285,8 @@ async fn start_proxying(
     // we can send a reference-counted version of it. also, since a
     // tokio-uring runtime is single-threaded, we can use `Rc` instead of
     // `Arc`.
-    let egress = Rc::new(remote);
-    let ingress = Rc::new(client);
+    let egress = Rc::new(egress);
+    let ingress = Rc::new(ingress);
 
     // We need to copy in both directions...
     let mut from_ingress = tokio_uring::spawn(
