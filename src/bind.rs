@@ -44,7 +44,7 @@ pub(crate) async fn bind(
         tokio_uring::spawn(async move {
             num_cons.fetch_add(1, Ordering::SeqCst);
 
-            match ingress.read_u8(30).await {
+            match ingress.read_u8(15).await {
                 Ok(opcode) => {
                     match opcode {
                         14 => handle_rs2(egress_addr, ingress, ingress_addr).await,

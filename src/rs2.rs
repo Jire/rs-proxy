@@ -12,7 +12,7 @@ pub(crate) async fn handle_rs2(
     ingress: TcpStream,
     ingress_addr: SocketAddr,
 ) {
-    match ingress.write_u8(0, 30).await {
+    match ingress.write_u8(0, 15).await {
         Ok(_) => {
             println!("Connecting RS2 {}", ingress_addr);
             return start_proxying(egress_addr, ingress, ingress_addr, 14).await;
