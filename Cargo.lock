@@ -288,6 +288,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "proxy-header"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b8e220ac9305411757d06712209b7c2d1d35c3a1a577301e87855f6219585ecb"
+
+[[package]]
 name = "quote"
 version = "1.0.35"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -307,10 +313,11 @@ dependencies = [
 
 [[package]]
 name = "rs-proxy"
-version = "0.3.1"
+version = "0.4.0"
 dependencies = [
  "futures",
  "getopts",
+ "proxy-header",
  "tokio",
  "tokio-uring",
 ]
