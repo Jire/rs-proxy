@@ -34,13 +34,13 @@ pub(crate) async fn bind(
     let listener = TcpListener::bind(bind_sock).unwrap();
     println!("Listening on {} for RS version {}", listener.local_addr().unwrap(), version);
 
-    while let Ok((ingress, ingress_addr)) = listener.accept().await {
+    while let Ok((ingress, _)) = listener.accept().await {
         let num_cons = Arc::clone(&num_cons);
 
         tokio_uring::spawn(async move {
             num_cons.fetch_add(1, Ordering::SeqCst);
 
-            proxy::handle_proxy(version, egress_addr, ingress, ingress_addr).await;
+            proxy::handle_proxy(version, egress_addr, ingress).await;
 
             num_cons.fetch_sub(1, Ordering::SeqCst);
         });

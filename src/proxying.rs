@@ -1,4 +1,4 @@
-use std::net::SocketAddr;
+use std::net::{SocketAddr, SocketAddrV4};
 use std::rc::Rc;
 use std::time::Duration;
 
@@ -14,23 +14,32 @@ const BUFFER_SIZE: usize = 1024;
 pub(crate) async fn start_proxying(
     egress_addr: SocketAddr,
     ingress: TcpStream,
-    ingress_addr: SocketAddr,
+    ingress_addr: SocketAddrV4,
     opcode: u8,
 ) {
     let egress = match connect_with_timeout(egress_addr, DEFAULT_READ_TIMEOUT).await {
         Ok(stream) => stream,
-        Err(_e) => {
-            eprintln!("Failed to connect to {}; err = {:?}", egress_addr, _e);
+        Err(e) => {
+            eprintln!("Failed to connect to {}; err = {:?}", egress_addr, e);
             return;
         }
     };
 
     match egress.write_u8(opcode, DEFAULT_WRITE_TIMEOUT).await {
+        Ok(_) => {}
+        Err(e) => {
+            eprintln!("Failed to write opcode {} response to {}; err = {:?}", opcode, ingress_addr, e);
+            return;
+        }
+    }
+
+    let ingress_addr_octets = Vec::from(ingress_addr.ip().octets());
+    match egress.write_buf(ingress_addr_octets, 4, DEFAULT_WRITE_TIMEOUT).await {
         Ok(_) => {
             println!("Connected {} with opcode {}", ingress_addr, opcode)
         }
-        Err(_) => {
-            //eprintln!("Failed to write opcode {} response to {}; err = {:?}", opcode, client_addr, _e);
+        Err(e) => {
+            eprintln!("Failed to write ingress addr {}; err = {:?}", ingress_addr, e);
             return;
         }
     }

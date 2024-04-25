@@ -1,4 +1,4 @@
-use std::net::SocketAddr;
+use std::net::{SocketAddr, SocketAddrV4};
 
 use tokio_uring::net::TcpStream;
 
@@ -11,7 +11,7 @@ pub(crate) async fn handle_js5(
     expected_version: u32,
     egress_addr: SocketAddr,
     ingress: TcpStream,
-    ingress_addr: SocketAddr,
+    ingress_addr: SocketAddrV4,
 ) {
     match ingress.read_buf(vec![0u8; 4], DEFAULT_READ_TIMEOUT).await {
         Ok(buf) => {
@@ -28,8 +28,8 @@ pub(crate) async fn handle_js5(
                 Err(_e) => return
             }
         }
-        Err(_e) => {
-            //eprintln!("failed to read from JS5 socket; err = {:?}", _e)
+        Err(e) => {
+            eprintln!("Failed to read from JS5 socket; err = {:?}", e);
             return;
         }
     }

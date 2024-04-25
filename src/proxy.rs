@@ -12,13 +12,13 @@ pub(crate) async fn handle_proxy(
     version: u32,
     egress_addr: SocketAddr,
     ingress: TcpStream,
-    ingress_addr: SocketAddr,
 ) {
     match ingress.read_proxy_header(DEFAULT_READ_TIMEOUT).await {
         Ok(info) => {
             match info.addr {
                 Some(addr) => {
-                    println!("Proxied connection from {} to {}", addr.source, addr.destination);
+                    let ingress_addr = addr.source;
+                    //println!("Proxied connection from {} to {}", ingress_addr, addr.destination);
 
                     match ingress.read_u8(DEFAULT_READ_TIMEOUT).await {
                         Ok(opcode) => {
@@ -30,12 +30,12 @@ pub(crate) async fn handle_proxy(
                                 }
                             }
                         }
-                        Err(_e) => {}//eprintln!("failed to read from socket; err = {:?}", _e);*/
+                        Err(e) => eprintln!("Failed to read from socket; err = {:?}", e)
                     }
                 }
                 None => println!("Local connection (e.g. healthcheck)")
             }
         }
-        Err(_) => {}
+        Err(e) => eprintln!("Failed to read proxy header from socket; err = {:?}", e)
     }
 }

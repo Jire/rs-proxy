@@ -2,13 +2,15 @@ use std::time::Duration;
 
 use io::{Error, ErrorKind};
 use tokio::{io, time};
-use tokio_uring::buf::IoBufMut;
+use tokio_uring::buf::{IoBuf, IoBufMut};
 use tokio_uring::net::TcpStream;
 
 pub trait TimeoutTcpStream {
     async fn read_buf<T: IoBufMut>(&self, buf: T, timeout: u64) -> io::Result<T>;
 
     async fn read_u8(&self, timeout: u64) -> io::Result<u8>;
+
+    async fn write_buf<T: IoBuf>(&self, buf: T, buf_len: usize, timeout: u64) -> io::Result<usize>;
 
     async fn write_u8(&self, value: u8, timeout: u64) -> io::Result<usize>;
 }
@@ -41,6 +43,20 @@ impl TimeoutTcpStream for TcpStream {
                 return Ok(u8);
             }
             Err(_) => Err(Error::new(ErrorKind::TimedOut, "Read timed out")),
+            _ => Err(Error::new(ErrorKind::Other, "Other issue occurred"))
+        }
+    }
+
+    async fn write_buf<T: IoBuf>(&self, buf: T, buf_len: usize, timeout: u64) -> io::Result<usize> {
+        match time::timeout(Duration::from_secs(timeout), self.write(buf)).await {
+            Ok((Ok(size), _buf)) => {
+                if size < buf_len {
+                    return Err(Error::new(ErrorKind::UnexpectedEof, "Didn't write all the data"));
+                }
+
+                Ok(size)
+            }
+            Err(_) => Err(Error::new(ErrorKind::TimedOut, "Write timed out")),
             _ => Err(Error::new(ErrorKind::Other, "Other issue occurred"))
         }
     }
