@@ -15,6 +15,9 @@ type BoxedError = Box<dyn Error + Sync + Send + 'static>;
 
 const DEFAULT_TIMEOUT: u64 = 30;
 
+const DEFAULT_READ_TIMEOUT: u64 = 15;
+const DEFAULT_WRITE_TIMEOUT: u64 = 15;
+
 fn main() -> Result<(), BoxedError> {
     let args: Vec<String> = env::args().collect();
 

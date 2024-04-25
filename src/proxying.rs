@@ -6,6 +6,7 @@ use tokio::{io, time};
 use tokio_uring::buf::IoBuf;
 use tokio_uring::net::TcpStream;
 
+use crate::{DEFAULT_READ_TIMEOUT, DEFAULT_WRITE_TIMEOUT};
 use crate::timeout_io::TimeoutTcpStream;
 
 const BUFFER_SIZE: usize = 1024;
@@ -16,7 +17,7 @@ pub(crate) async fn start_proxying(
     ingress_addr: SocketAddr,
     opcode: u8,
 ) {
-    let egress = match connect_with_timeout(egress_addr, 15).await {
+    let egress = match connect_with_timeout(egress_addr, DEFAULT_READ_TIMEOUT).await {
         Ok(stream) => stream,
         Err(_e) => {
             eprintln!("Failed to connect to {}; err = {:?}", egress_addr, _e);
@@ -24,7 +25,7 @@ pub(crate) async fn start_proxying(
         }
     };
 
-    match egress.write_u8(opcode, 15).await {
+    match egress.write_u8(opcode, DEFAULT_WRITE_TIMEOUT).await {
         Ok(_) => {
             println!("Connected {} with opcode {}", ingress_addr, opcode)
         }

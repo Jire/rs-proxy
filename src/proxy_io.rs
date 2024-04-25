@@ -1,20 +1,11 @@
 use std::net::{Ipv4Addr, SocketAddrV4};
 
 use proxy_header::Error::{BufferTooShort, Invalid};
-use proxy_header::ParseConfig;
 use thiserror::Error;
 use tokio::io;
-use tokio_uring::buf::IoBufMut;
 use tokio_uring::net::TcpStream;
 
 use crate::timeout_io::TimeoutTcpStream;
-
-pub const PROXY_PARSE_CONFIG: ParseConfig = ParseConfig {
-    include_tlvs: false,
-
-    allow_v1: false,
-    allow_v2: true,
-};
 
 pub const PROXY_EXPECTED_HEADER_BYTES: usize = 28;
 
@@ -28,8 +19,8 @@ pub(crate) enum ProxyTcpStreamError {
 }
 
 pub(crate) trait ProxyTcpStream {
-    async fn read_proxy_header<T: IoBufMut>(&self, timeout: u64)
-                                            -> Result<ProxiedInfo, ProxyTcpStreamError>;
+    async fn read_proxy_header(&self, timeout: u64)
+                               -> Result<ProxiedInfo, ProxyTcpStreamError>;
 }
 
 const GREETING: &[u8] = b"\r\n\r\n\x00\r\nQUIT\n";
@@ -81,8 +72,8 @@ fn parse_addrs(
 }
 
 impl ProxyTcpStream for TcpStream {
-    async fn read_proxy_header<T: IoBufMut>(&self, timeout: u64)
-                                            -> Result<ProxiedInfo, ProxyTcpStreamError> {
+    async fn read_proxy_header(&self, timeout: u64)
+                               -> Result<ProxiedInfo, ProxyTcpStreamError> {
 
         // Read data into the buffer with a specified timeout
         let buf = TimeoutTcpStream::read_buf(self,
