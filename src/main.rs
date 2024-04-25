@@ -8,6 +8,8 @@ mod rs2;
 mod js5;
 mod proxying;
 mod timeout_io;
+mod proxy;
+mod proxy_io;
 
 type BoxedError = Box<dyn Error + Sync + Send + 'static>;
 

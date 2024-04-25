@@ -6,11 +6,7 @@ use std::time::{Duration, Instant};
 use tokio::time::sleep;
 use tokio_uring::net::TcpListener;
 
-use js5::handle_js5;
-use rs2::handle_rs2;
-
-use crate::{js5, rs2};
-use crate::timeout_io::TimeoutTcpStream;
+use crate::proxy;
 
 pub(crate) async fn bind(
     version: u32,
@@ -44,18 +40,7 @@ pub(crate) async fn bind(
         tokio_uring::spawn(async move {
             num_cons.fetch_add(1, Ordering::SeqCst);
 
-            match ingress.read_u8(15).await {
-                Ok(opcode) => {
-                    match opcode {
-                        14 => handle_rs2(egress_addr, ingress, ingress_addr).await,
-                        15 => handle_js5(version, egress_addr, ingress, ingress_addr).await,
-                        _ => {
-                            //println!("Invalid opcode {} from {}", _opcode, client_addr);
-                        }
-                    }
-                }
-                Err(_e) => {} //eprintln!("failed to read from socket; err = {:?}", _e);*/
-            }
+            proxy::handle_proxy(version, egress_addr, ingress, ingress_addr).await;
 
             num_cons.fetch_sub(1, Ordering::SeqCst);
         });
