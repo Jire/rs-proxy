@@ -25,16 +25,13 @@ pub(crate) async fn start_proxying(
         }
     };
 
-    match egress.write_u8(opcode, DEFAULT_WRITE_TIMEOUT).await {
-        Ok(_) => {}
-        Err(e) => {
-            eprintln!("Failed to write opcode {} response to {}; err = {:?}", opcode, ingress_addr, e);
-            return;
-        }
-    }
+    let ingress_addr_octets = ingress_addr.ip().octets();
 
-    let ingress_addr_octets = Vec::from(ingress_addr.ip().octets());
-    match egress.write_buf(ingress_addr_octets, 4, DEFAULT_WRITE_TIMEOUT).await {
+    let mut start_buf = Vec::with_capacity(5);
+    start_buf.push(opcode);
+    start_buf.extend_from_slice(&ingress_addr_octets);
+
+    match egress.write_buf(start_buf, 5, DEFAULT_WRITE_TIMEOUT).await {
         Ok(_) => {
             println!("Connected {} with opcode {}", ingress_addr, opcode)
         }
