@@ -50,6 +50,7 @@ fn main() -> Result<(), BoxedError> {
         "TIMEOUT",
     );
     opts.optflag("d", "debug", "enable debug mode");
+    opts.optopt("", "sqpoll", "time millis to use with SQPOLL for submission queue polling", "SQPOLL");
 
     let matches = match opts.parse(&args[1..]) {
         Ok(opts) => opts,
@@ -66,6 +67,15 @@ fn main() -> Result<(), BoxedError> {
     }
 
     let debug: bool = matches.opt_present("d");
+
+    let sqpoll: i32 = if matches.opt_present("sqpoll") {
+        matches.opt_str("sqpoll")
+            .expect("SQPOLL must be present")
+            .parse()
+            .map_err(|e| format!("Failed to parse SQPOLL as i32: {}", e))?
+    } else {
+        -1
+    };
 
     let version: u32 = matches.opt_str("v")
         .expect("Version must be present")
@@ -98,13 +108,15 @@ fn main() -> Result<(), BoxedError> {
         let num_cons = Arc::clone(&num_cons);
 
         let handle = thread::spawn(move || {
+            let mut uring_builder = tokio_uring::uring_builder();
+            uring_builder.setup_cqsize(2 << 12);
+            if sqpoll > 0 {
+                uring_builder.setup_sqpoll(sqpoll as u32);
+            }
+
             tokio_uring::builder()
                 .entries(2 << 11)
-                .uring_builder(
-                    tokio_uring::uring_builder()
-                        .setup_cqsize(2 << 12)
-                        .setup_sqpoll(20) // backoff at 20ms interval to match client tick
-                )
+                .uring_builder(&uring_builder)
                 .start(async move {
                     bind::bind(debug, num_cons, version, local_addr, remote_addr).await;
                 });
