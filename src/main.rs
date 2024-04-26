@@ -24,8 +24,6 @@ const DEFAULT_TIMEOUT: u64 = 30;
 const DEFAULT_READ_TIMEOUT: u64 = 15;
 const DEFAULT_WRITE_TIMEOUT: u64 = 15;
 
-const DEBUG: bool = false;
-
 fn main() -> Result<(), BoxedError> {
     let args: Vec<String> = env::args().collect();
 
@@ -51,6 +49,7 @@ fn main() -> Result<(), BoxedError> {
         "sets the timeout in seconds to stop after no activity",
         "TIMEOUT",
     );
+    opts.optflag("d", "debug", "enable debug mode");
 
     let matches = match opts.parse(&args[1..]) {
         Ok(opts) => opts,
@@ -65,6 +64,8 @@ fn main() -> Result<(), BoxedError> {
         print_usage(&program, opts);
         return Ok(());
     }
+
+    let debug: bool = matches.opt_present("d");
 
     let version: u32 = matches.opt_str("v")
         .expect("Version must be present")
@@ -104,8 +105,8 @@ fn main() -> Result<(), BoxedError> {
                         .setup_cqsize(2 << 12)
                         .setup_sqpoll(20) // backoff at 20ms interval to match client tick
                 )
-                .start(async {
-                    bind::bind(num_cons, version, local_addr, remote_addr).await;
+                .start(async move {
+                    bind::bind(debug, num_cons, version, local_addr, remote_addr).await;
                 });
         });
         handles.push(handle);

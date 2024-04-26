@@ -7,6 +7,7 @@ use tokio_uring::net::TcpListener;
 use crate::proxy;
 
 pub(crate) async fn bind(
+    debug: bool,
     num_cons: Arc<AtomicU64>,
     version: u32,
     local_addr: SocketAddr,
@@ -20,7 +21,7 @@ pub(crate) async fn bind(
         tokio_uring::spawn(async move {
             num_cons.fetch_add(1, Ordering::SeqCst);
 
-            proxy::handle_proxy(version, remote_addr, ingress).await;
+            proxy::handle_proxy(version, remote_addr, ingress, debug).await;
 
             num_cons.fetch_sub(1, Ordering::SeqCst);
         });
