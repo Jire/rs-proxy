@@ -218,7 +218,7 @@ dependencies = [
 
 [[package]]
 name = "rs-proxy"
-version = "0.9.0"
+version = "0.10.0"
 dependencies = [
  "bytes",
  "getopts",

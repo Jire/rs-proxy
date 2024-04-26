@@ -4,24 +4,14 @@ use tokio_uring::net::TcpStream;
 
 use proxying::start_proxying;
 
-use crate::{DEFAULT_WRITE_TIMEOUT, proxying};
 use crate::proxy_io::ProxiedAddress;
-use crate::timeout_io::TimeoutTcpStream;
+use crate::proxying;
 
 pub(crate) async fn handle_ping(
     egress_addr: SocketAddr,
     ingress: TcpStream,
     proxied_addr: ProxiedAddress,
 ) {
-    match ingress.write_u8(0, DEFAULT_WRITE_TIMEOUT).await {
-        Ok(_) => {
-            println!("Connecting ping {}", proxied_addr);
-            return start_proxying(egress_addr, ingress, proxied_addr, 200).await;
-        }
-        Err(e) => {
-            drop(ingress);
-            eprintln!("Failed to write ping response to socket; err = {:?}", e);
-            return;
-        }
-    }
+    println!("Connecting ping {}", proxied_addr);
+    return start_proxying(egress_addr, ingress, proxied_addr, 200).await;
 }

@@ -28,17 +28,6 @@ pub(crate) async fn start_proxying(
         }
     };
 
-    if opcode == 200 {
-        match ingress.write_u8(0, DEFAULT_WRITE_TIMEOUT).await {
-            Ok(_) => {}
-            Err(e) => {
-                drop(ingress);
-                eprintln!("Failed to write ping connect response to socket; err = {:?}", e);
-                return;
-            }
-        }
-    }
-
     let mut start_buf = BytesMut::with_capacity(5);
     start_buf.put_u8(opcode);
     start_buf.extend_from_slice(&proxied_addr.0);
