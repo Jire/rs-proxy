@@ -16,6 +16,7 @@ mod proxying;
 mod timeout_io;
 mod proxy;
 mod proxy_io;
+mod ping;
 
 type BoxedError = Box<dyn Error + Sync + Send + 'static>;
 
