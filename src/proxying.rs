@@ -22,6 +22,7 @@ pub(crate) async fn start_proxying(
     let egress = match connect_with_timeout(egress_addr, DEFAULT_READ_TIMEOUT).await {
         Ok(stream) => stream,
         Err(e) => {
+            drop(ingress);
             eprintln!("Failed to connect to {}; err = {:?}", egress_addr, e);
             return;
         }
@@ -36,6 +37,8 @@ pub(crate) async fn start_proxying(
             println!("Connected {} with opcode {}", proxied_addr, opcode)
         }
         Err(e) => {
+            drop(ingress);
+            drop(egress);
             eprintln!("Failed to write to {}; err = {:?}", proxied_addr, e);
             return;
         }

@@ -19,6 +19,7 @@ pub(crate) async fn handle_js5(
         Ok(mut buf) => {
             let version = buf.get_u32();
             if expected_version != version {
+                drop(ingress);
                 println!("Invalid JS5 version {} (expected {}) from {}",
                          version, expected_version, proxied_addr);
                 return;
@@ -29,10 +30,14 @@ pub(crate) async fn handle_js5(
                     println!("Connecting JS5 {}", proxied_addr);
                     return start_proxying(egress_addr, ingress, proxied_addr, 15).await;
                 }
-                Err(_e) => return
+                Err(_e) => {
+                    drop(ingress);
+                    return
+                }
             }
         }
         Err(e) => {
+            drop(ingress);
             eprintln!("Failed to read from JS5 socket; err = {:?}", e);
             return;
         }

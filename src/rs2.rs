@@ -19,6 +19,7 @@ pub(crate) async fn handle_rs2(
             return start_proxying(egress_addr, ingress, proxied_addr, 14).await;
         }
         Err(e) => {
+            drop(ingress);
             eprintln!("Failed to write RS2 response to socket; err = {:?}", e);
             return;
         }
