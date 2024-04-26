@@ -2,7 +2,7 @@ use std::net::SocketAddr;
 
 use tokio_uring::net::TcpStream;
 
-use crate::DEFAULT_READ_TIMEOUT;
+use crate::{DEBUG, DEFAULT_READ_TIMEOUT};
 use crate::js5::handle_js5;
 use crate::proxy_io::ProxyTcpStream;
 use crate::rs2::handle_rs2;
@@ -14,28 +14,29 @@ pub(crate) async fn handle_proxy(
     ingress: TcpStream,
 ) {
     match ingress.read_proxy_header(DEFAULT_READ_TIMEOUT).await {
-        Ok(info) => {
-            match info.addr {
-                Some(addr) => {
-                    let ingress_addr = addr.source;
-                    //println!("Proxied connection from {} to {}", ingress_addr, addr.destination);
+        Ok(proxied_addresses) => {
+            let proxied_address = proxied_addresses.source;
+            println!("Proxied connection from {} to {}",
+                     proxied_address,
+                     proxied_addresses.destination);
 
-                    match ingress.read_u8(DEFAULT_READ_TIMEOUT).await {
-                        Ok(opcode) => {
-                            match opcode {
-                                14 => handle_rs2(egress_addr, ingress, ingress_addr).await,
-                                15 => handle_js5(version, egress_addr, ingress, ingress_addr).await,
-                                _ => {
-                                    //println!("Invalid opcode {} from {}", _opcode, client_addr);
-                                }
-                            }
+            match ingress.read_u8(DEFAULT_READ_TIMEOUT).await {
+                Ok(opcode) => {
+                    match opcode {
+                        14 => handle_rs2(egress_addr, ingress, proxied_address).await,
+                        15 => handle_js5(version, egress_addr, ingress, proxied_address).await,
+                        _ => if DEBUG {
+                            println!("Invalid opcode {} from {}", opcode, proxied_address);
                         }
-                        Err(e) => eprintln!("Failed to read from socket; err = {:?}", e)
                     }
                 }
-                None => println!("Local connection (e.g. healthcheck)")
+                Err(e) => if DEBUG {
+                    eprintln!("Failed to read from socket; err = {:?}", e)
+                }
             }
         }
-        Err(e) => eprintln!("Failed to read proxy header from socket; err = {:?}", e)
+        Err(e) => if DEBUG {
+            eprintln!("Failed to read proxy header from socket; err = {:?}", e)
+        }
     }
 }

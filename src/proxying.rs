@@ -1,12 +1,14 @@
-use std::net::{SocketAddr, SocketAddrV4};
+use std::net::SocketAddr;
 use std::rc::Rc;
 use std::time::Duration;
 
+use bytes::{BufMut, BytesMut};
 use tokio::{io, time};
 use tokio_uring::buf::IoBuf;
 use tokio_uring::net::TcpStream;
 
 use crate::{DEFAULT_READ_TIMEOUT, DEFAULT_WRITE_TIMEOUT};
+use crate::proxy_io::ProxiedAddress;
 use crate::timeout_io::TimeoutTcpStream;
 
 const BUFFER_SIZE: usize = 1024;
@@ -14,7 +16,7 @@ const BUFFER_SIZE: usize = 1024;
 pub(crate) async fn start_proxying(
     egress_addr: SocketAddr,
     ingress: TcpStream,
-    ingress_addr: SocketAddrV4,
+    proxied_addr: ProxiedAddress,
     opcode: u8,
 ) {
     let egress = match connect_with_timeout(egress_addr, DEFAULT_READ_TIMEOUT).await {
@@ -25,18 +27,16 @@ pub(crate) async fn start_proxying(
         }
     };
 
-    let ingress_addr_octets = ingress_addr.ip().octets();
-
-    let mut start_buf = Vec::with_capacity(5);
-    start_buf.push(opcode);
-    start_buf.extend_from_slice(&ingress_addr_octets);
+    let mut start_buf = BytesMut::with_capacity(5);
+    start_buf.put_u8(opcode);
+    start_buf.extend_from_slice(&proxied_addr.0);
 
     match egress.write_buf(start_buf, 5, DEFAULT_WRITE_TIMEOUT).await {
         Ok(_) => {
-            println!("Connected {} with opcode {}", ingress_addr, opcode)
+            println!("Connected {} with opcode {}", proxied_addr, opcode)
         }
         Err(e) => {
-            eprintln!("Failed to write ingress addr {}; err = {:?}", ingress_addr, e);
+            eprintln!("Failed to write to {}; err = {:?}", proxied_addr, e);
             return;
         }
     }

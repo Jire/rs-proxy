@@ -1,5 +1,6 @@
-use std::net::{Ipv4Addr, SocketAddrV4};
+use std::fmt;
 
+use bytes::BytesMut;
 use proxy_header::Error::{BufferTooShort, Invalid};
 use thiserror::Error;
 use tokio::io;
@@ -20,33 +21,35 @@ pub(crate) enum ProxyTcpStreamError {
 
 pub(crate) trait ProxyTcpStream {
     async fn read_proxy_header(&self, timeout: u64)
-                               -> Result<ProxiedInfo, ProxyTcpStreamError>;
+                               -> Result<ProxiedAddresses, ProxyTcpStreamError>;
 }
 
 const GREETING: &[u8] = b"\r\n\r\n\x00\r\nQUIT\n";
-const AF_UNIX_ADDRS_LEN: usize = 216;
+const GREETING_LEN: usize = GREETING.len();
 
 const BYTES: usize = 4;
 
-#[derive(Debug, PartialEq, Eq, Clone, Hash)]
-pub struct ProxiedInfo {
-    pub pos: usize,
-    pub addr: Option<ProxiedAddress>,
+pub(crate) struct ProxiedAddress(pub(crate) [u8; 4]);
+
+impl fmt::Display for ProxiedAddress {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}.{}.{}.{}", self.0[0], self.0[1], self.0[2], self.0[3])
+    }
 }
 
-#[derive(Debug, PartialEq, Eq, Clone, Hash)]
-pub struct ProxiedAddress {
+pub struct ProxiedAddresses {
     /// Source address (this is the address of the actual client)
-    pub source: SocketAddrV4,
+    pub source: ProxiedAddress,
+
     /// Destination address (this is the address of the proxy)
-    pub destination: SocketAddrV4,
+    pub destination: ProxiedAddress,
 }
 
 fn parse_addrs(
-    buf: Vec<u8>,
+    buf: BytesMut,
     pos: &mut usize,
     rest: &mut usize,
-) -> Result<ProxiedAddress, proxy_header::Error> {
+) -> Result<ProxiedAddresses, proxy_header::Error> {
     if buf.len() < *pos + BYTES * 2 + 4 {
         return Err(BufferTooShort);
     }
@@ -54,15 +57,9 @@ fn parse_addrs(
         return Err(Invalid);
     }
 
-    let ret = ProxiedAddress {
-        source: SocketAddrV4::new(
-            Ipv4Addr::new(buf[*pos], buf[*pos + 1], buf[*pos + 2], buf[*pos + 3]),//Ipv4Addr::from(buf[*pos..*pos + BYTES]),
-            u16::from_be_bytes([buf[*pos + BYTES * 2], buf[*pos + BYTES * 2 + 1]]),
-        ),
-        destination: SocketAddrV4::new(
-            Ipv4Addr::new(buf[*pos + BYTES], buf[*pos + BYTES + 1], buf[*pos + BYTES + 2], buf[*pos + BYTES + 3]),//Ipv4Addr::from(buf[*pos + BYTES..*pos + BYTES * 2]),
-            u16::from_be_bytes([buf[*pos + BYTES * 2 + 2], buf[*pos + BYTES * 2 + 3]]),
-        ),
+    let ret = ProxiedAddresses {
+        source: ProxiedAddress(buf[*pos..*pos + BYTES].try_into().unwrap()),
+        destination: ProxiedAddress(buf[*pos + BYTES..*pos + BYTES * 2].try_into().unwrap()),
     };
 
     *rest -= BYTES * 2 + 4;
@@ -73,31 +70,33 @@ fn parse_addrs(
 
 impl ProxyTcpStream for TcpStream {
     async fn read_proxy_header(&self, timeout: u64)
-                               -> Result<ProxiedInfo, ProxyTcpStreamError> {
+                               -> Result<ProxiedAddresses, ProxyTcpStreamError> {
 
         // Read data into the buffer with a specified timeout
         let buf = TimeoutTcpStream::read_buf(self,
-                                             vec![0u8; PROXY_EXPECTED_HEADER_BYTES],
+                                             BytesMut::with_capacity(PROXY_EXPECTED_HEADER_BYTES),
                                              timeout)
             .await
             .map_err(ProxyTcpStreamError::Io)?;
 
         let mut pos = 0;
 
-        if buf.len() < 4 + GREETING.len() {
+        if buf.len() < 4 + GREETING_LEN {
             return Err(ProxyTcpStreamError::ProxyHeader(BufferTooShort));
         }
         if !buf.starts_with(GREETING) {
             return Err(ProxyTcpStreamError::ProxyHeader(Invalid));
         }
-        pos += GREETING.len();
+        pos += GREETING_LEN;
 
-        let _is_local = match buf[pos] {
-            0x20 => true,
+        match buf[pos] {
+            0x20 => return Err(ProxyTcpStreamError::ProxyHeader(Invalid)), // local not allowed
             0x21 => false,
             _ => return Err(ProxyTcpStreamError::ProxyHeader(Invalid)),
         };
+
         let protocol = buf[pos + 1];
+
         let mut rest = u16::from_be_bytes([buf[pos + 2], buf[pos + 3]]) as usize;
         pos += 4;
 
@@ -105,32 +104,10 @@ impl ProxyTcpStream for TcpStream {
             return Err(ProxyTcpStreamError::ProxyHeader(BufferTooShort));
         }
 
-        let addr = match protocol {
-            0x00 => None,
-            0x11 => Some(parse_addrs(buf, &mut pos, &mut rest)?),
-            //0x12 => Some(parse_addrs::<Ipv4Addr>(buf, &mut pos, &mut rest, Datagram)?),
-            //0x21 => Some(parse_addrs::<Ipv6Addr>(buf, &mut pos, &mut rest, Stream)?),
-            //0x22 => Some(parse_addrs::<Ipv6Addr>(buf, &mut pos, &mut rest, Datagram)?),
-            0x31 | 0x32 => {
-                // AF_UNIX - we do not parse this, but don't reject it either in case
-                // someone needs the TLVs
-
-                if rest < AF_UNIX_ADDRS_LEN {
-                    return Err(ProxyTcpStreamError::ProxyHeader(Invalid));
-                }
-                rest -= AF_UNIX_ADDRS_LEN;
-                pos += AF_UNIX_ADDRS_LEN;
-
-                None
-            }
-            _ => return Err(ProxyTcpStreamError::ProxyHeader(Invalid)),
-        };
-
-        pos += rest;
-
-        return Ok(ProxiedInfo {
-            pos,
-            addr,
-        });
+        if protocol == 0x11 {
+            Ok(parse_addrs(buf, &mut pos, &mut rest)?)
+        } else {
+            Err(ProxyTcpStreamError::ProxyHeader(Invalid))
+        }
     }
 }
